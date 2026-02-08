@@ -4,7 +4,7 @@ function App() {
   const [debts, setDebts] = useState([]);
 
   useEffect(() => {
-    fetch("http://localhost:8000/debts")
+    fetch(import.meta.env.VITE_API_URL + "/debts")
       .then((res) => res.json())
       .then((data) => setDebts(data.items));
   }, []);

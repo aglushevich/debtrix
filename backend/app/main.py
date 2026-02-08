@@ -1,13 +1,20 @@
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from datetime import date, timedelta
-
 from debt_case import DebtCase
 from translator import t
 from dacf import detect_actions
 
 app = FastAPI(title="Debtrix")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/health")
 def health():

@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from status import DebtStatus
+from logs import DebtLogEntry, LogEventType
 
 
 class DebtCase:
@@ -10,6 +11,7 @@ class DebtCase:
         self.notified = False
         self.documents_prepared = False
         self.closed = False
+        self.logs: list[DebtLogEntry] = []
 
     def days_overdue(self) -> int:
         today = date.today()
@@ -30,3 +32,10 @@ class DebtCase:
         if self.days_overdue() > 0:
             return DebtStatus.OVERDUE
         return DebtStatus.NEW
+    def add_log(self, event_type: LogEventType, message: str):
+        self.logs.append(
+         DebtLogEntry(
+         event_type=event_type,
+         message=message
+         )
+        )

@@ -7,6 +7,12 @@ from translator import t
 from dacf import detect_actions
 
 app = FastAPI(title="Debtrix")
+@app.get("/")
+def health():
+    return {
+        "status": "ok",
+        "service": "debtrix"
+    }
 
 app.add_middleware(
     CORSMiddleware,

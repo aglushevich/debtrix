@@ -4,6 +4,7 @@ from datetime import date
 from status import DebtStatus
 from debt_case import DebtCase
 from translator import t
+from dacf import detect_actions
 
 app = FastAPI(title="Debtrix")
 
@@ -38,8 +39,16 @@ def get_debts():
     "status": {
         "code": debt.status().value,
         "title": t(f"status.{debt.status().value}")
-    }
-}
+    },
+    "actions": [
+        {
+        "code": action.value,
+        "title": t(f"action.{action.value}")
+        }
+        for action in detect_actions(debt)
+    ]
+     }
+
             ]
         },
         media_type="application/json; charset=utf-8"

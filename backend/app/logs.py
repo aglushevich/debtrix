@@ -1,20 +1,18 @@
-from enum import Enum
+from __future__ import annotations
+
+from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 
 class LogEventType(str, Enum):
     ACTION_SUGGESTED = "action_suggested"
-    ACTION_CONFIRMED = "action_confirmed"
-    STATUS_CHANGED = "status_changed"
+    ACTION_APPLIED = "action_applied"
+    INFO = "info"
 
 
+@dataclass
 class DebtLogEntry:
-    def __init__(
-        self,
-        event_type: LogEventType,
-        message: str,
-        created_at: datetime | None = None,
-    ):
-        self.event_type = event_type
-        self.message = message
-        self.created_at = created_at or datetime.utcnow()
+    event_type: LogEventType
+    message: str
+    created_at: datetime = datetime.utcnow()

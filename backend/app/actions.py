@@ -1,6 +1,5 @@
 from enum import Enum
 
-
 class DebtAction(str, Enum):
     REMIND = "remind"
     PRETENSION = "pretension"

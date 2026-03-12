@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# Env
+.env
+.env.*
+
+# Logs
+*.log
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Python tooling
+.pytest_cache/
+.mypy_cache/
+ruff_cache/
+
+# Node / frontend
+node_modules/
+dist/
+build/
+
+# Local databases
+*.sqlite
+*.db
+
+# Docker / temp
+tmp/
+.cache/
+
+# Uploaded/generated files
+uploads/
+generated/

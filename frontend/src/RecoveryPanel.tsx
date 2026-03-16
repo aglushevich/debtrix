@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   addPayment,
   getRecovery,
@@ -20,6 +20,16 @@ function stringifyValue(value: any) {
     }
   }
   return String(value);
+}
+
+function formatMoneyLike(value: any) {
+  const num = Number(String(value ?? 0).replace(",", "."));
+  if (!Number.isFinite(num)) return String(value ?? "—");
+
+  return num.toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 export default function RecoveryPanel({ caseId }: Props) {
@@ -104,20 +114,45 @@ export default function RecoveryPanel({ caseId }: Props) {
     }
   }
 
-  if (!caseId) return null;
-
-  const recovery = data?.recovery || {};
+  const recovery = data?.recovery || data || {};
   const components = recovery?.components || {};
-  const summaryEntries = Object.entries(recovery || {}).filter(
-    ([key]) => key !== "components"
-  );
+  const summaryEntries = Object.entries(recovery || {}).filter(([key]) => key !== "components");
   const componentEntries = Object.entries(components);
+
+  const kpiCards = useMemo(() => {
+    const preferredKeys = [
+      "principal_amount",
+      "penalty_amount",
+      "interest_amount",
+      "total_amount",
+      "outstanding_amount",
+      "status",
+    ];
+
+    const existing = preferredKeys
+      .filter((key) => key in recovery)
+      .map((key) => [key, recovery[key]] as [string, any]);
+
+    return existing.slice(0, 6);
+  }, [recovery]);
+
+  if (!caseId) return null;
 
   return (
     <section className="panel">
-      <div className="panel-title">Recovery</div>
+      <div className="section-header">
+        <div>
+          <div className="section-eyebrow">Recovery accounting</div>
+          <div className="panel-title" style={{ marginBottom: 6 }}>
+            Recovery
+          </div>
+          <div className="muted">
+            Учёт начислений, платежей и агрегированной recovery-сводки по делу.
+          </div>
+        </div>
+      </div>
 
-      <div className="action-list" style={{ marginBottom: 16 }}>
+      <div className="action-list" style={{ marginTop: 16, marginBottom: 16 }}>
         <button
           className="secondary-btn"
           onClick={handleInit}
@@ -132,6 +167,21 @@ export default function RecoveryPanel({ caseId }: Props) {
 
       {!loading && data && (
         <>
+          {kpiCards.length > 0 && (
+            <div className="portfolio-mini-stats" style={{ marginBottom: 16 }}>
+              {kpiCards.map(([key, value]) => (
+                <div className="portfolio-mini-stat" key={key}>
+                  <span>{key}</span>
+                  <strong>
+                    {typeof value === "number" || /^[\d.,]+$/.test(String(value ?? ""))
+                      ? formatMoneyLike(value)
+                      : stringifyValue(value)}
+                  </strong>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="recovery-grid" style={{ marginBottom: 16 }}>
             {summaryEntries.length ? (
               summaryEntries.map(([key, value]) => (
@@ -145,7 +195,7 @@ export default function RecoveryPanel({ caseId }: Props) {
             )}
           </div>
 
-          <div className="panel" style={{ marginBottom: 16 }}>
+          <section className="panel panel-nested" style={{ marginBottom: 16 }}>
             <div className="panel-title">Компоненты начислений</div>
 
             {componentEntries.length ? (
@@ -161,9 +211,7 @@ export default function RecoveryPanel({ caseId }: Props) {
 
                     <div className="info-item info-item-wide" style={{ marginTop: 12 }}>
                       <span className="label">Данные</span>
-                      <strong className="code-block">
-                        {stringifyValue(value)}
-                      </strong>
+                      <strong className="code-block">{stringifyValue(value)}</strong>
                     </div>
                   </div>
                 ))}
@@ -171,10 +219,10 @@ export default function RecoveryPanel({ caseId }: Props) {
             ) : (
               <div className="empty-box">Компоненты начислений пока не заданы.</div>
             )}
-          </div>
+          </section>
 
           <div className="dashboard-grid">
-            <div className="panel">
+            <section className="panel panel-nested">
               <div className="panel-title">Обновить начисление</div>
 
               <div className="form-grid">
@@ -202,9 +250,9 @@ export default function RecoveryPanel({ caseId }: Props) {
                   </button>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div className="panel">
+            <section className="panel panel-nested">
               <div className="panel-title">Добавить платёж</div>
 
               <div className="form-grid">
@@ -225,7 +273,7 @@ export default function RecoveryPanel({ caseId }: Props) {
                   </button>
                 </div>
               </div>
-            </div>
+            </section>
           </div>
         </>
       )}

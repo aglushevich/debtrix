@@ -1,10 +1,37 @@
-import { formatCaseStatus } from "./legal";
+import { useEffect, useMemo, useState } from "react";
+import { getControlRoomDashboard } from "./api";
+import { formatDebtorType } from "./legalLabels";
 
 type Props = {
   cases: any[];
   selectedCaseIds: number[];
   selectedCase: number | null;
   onOpenCase: (caseId: number) => void;
+};
+
+type IntelligenceRow = {
+  case_id: number;
+  debtor_name: string;
+  status: string;
+  contract_type: string;
+  debtor_type: string;
+  principal_amount: string;
+  due_date: string | null;
+  risk_score: number;
+  risk_level: string;
+  signals: string[];
+  routing_bucket: string;
+  routing_status: string;
+  recommended_action: string | null;
+  is_blocked: boolean;
+  is_waiting: boolean;
+  is_ready_now: boolean;
+  is_court_lane: boolean;
+  is_enforcement_lane: boolean;
+  blocked_reasons: string[];
+  is_archived: boolean;
+  inn?: string | null;
+  ogrn?: string | null;
 };
 
 function parseAmount(value: any): number {
@@ -20,63 +47,208 @@ function formatMoney(value: number): string {
   });
 }
 
-function hasDebtorIdentifiers(item: any): boolean {
-  const inn = String(item?.debtor_profile?.inn || item?.inn || "").trim();
-  const ogrn = String(item?.debtor_profile?.ogrn || item?.ogrn || "").trim();
-  return Boolean(inn || ogrn);
+function riskLabel(level?: string): string {
+  const map: Record<string, string> = {
+    low: "Низкий",
+    medium: "Средний",
+    high: "Высокий",
+    critical: "Критический",
+  };
+  return map[level || ""] || level || "—";
 }
 
-function buildBuckets(cases: any[]) {
-  const readyNow = cases.filter((item: any) =>
-    ["overdue", "pretrial"].includes(String(item?.status || ""))
-  );
+function routingLabel(code?: string): string {
+  const map: Record<string, string> = {
+    active_collection: "Активное взыскание",
+    waiting: "Ожидание",
+    blocked: "Заблокировано",
+    court_lane: "Судебный трек",
+    enforcement_lane: "Исполнительный трек",
+    general: "Общий поток",
+    ready: "Готово",
+    idle: "Вне активного маршрута",
+  };
+  return map[code || ""] || code || "—";
+}
 
-  const waiting = cases.filter((item: any) =>
-    ["draft"].includes(String(item?.status || ""))
-  );
+function buildFallbackRow(item: any): IntelligenceRow {
+  const status = String(item?.status || "draft");
+  const amount = String(item?.principal_amount || "0.00");
+  const isArchived = Boolean(item?.is_archived);
 
-  const courtLane = cases.filter((item: any) =>
-    ["court"].includes(String(item?.status || ""))
-  );
-
-  const fsspLane = cases.filter((item: any) =>
-    ["fssp", "enforcement"].includes(String(item?.status || ""))
-  );
-
-  const closed = cases.filter((item: any) =>
-    ["closed"].includes(String(item?.status || ""))
-  );
-
-  const blocked = cases.filter((item: any) => {
-    const debtorNameMissing = !String(item?.debtor_name || "").trim();
-    const amountMissing = !parseAmount(item?.principal_amount);
-    const dueDateMissing = !String(item?.due_date || "").trim();
-    const identifiersMissing = !hasDebtorIdentifiers(item);
-
-    return debtorNameMissing || amountMissing || dueDateMissing || identifiersMissing;
-  });
+  const waiting = status === "draft";
+  const courtLane = status === "court";
+  const enforcementLane = ["fssp", "enforcement"].includes(status);
+  const readyNow = ["overdue", "pretrial"].includes(status);
 
   return {
-    readyNow,
-    waiting,
-    blocked,
-    courtLane,
-    fsspLane,
-    closed,
+    case_id: item.id,
+    debtor_name: item?.debtor_name || "—",
+    status,
+    contract_type: String(item?.contract_type || "—"),
+    debtor_type: String(item?.debtor_type || "—"),
+    principal_amount: amount,
+    due_date: item?.due_date || null,
+    risk_score: readyNow ? 48 : waiting ? 22 : 18,
+    risk_level: readyNow ? "medium" : "low",
+    signals: [],
+    routing_bucket: waiting
+      ? "waiting"
+      : courtLane
+        ? "court_lane"
+        : enforcementLane
+          ? "enforcement_lane"
+          : readyNow
+            ? "active_collection"
+            : "general",
+    routing_status: waiting ? "waiting" : readyNow ? "eligible" : "in_progress",
+    recommended_action: readyNow
+      ? "Открыть карточку и выполнить следующее действие"
+      : waiting
+        ? "Контролировать срок перехода"
+        : null,
+    is_blocked: false,
+    is_waiting: waiting,
+    is_ready_now: readyNow,
+    is_court_lane: courtLane,
+    is_enforcement_lane: enforcementLane,
+    blocked_reasons: [],
+    is_archived: isArchived,
+    inn: null,
+    ogrn: null,
   };
 }
 
-function priorityScore(item: any): number {
-  const status = String(item?.status || "");
-  const amount = parseAmount(item?.principal_amount);
+function sortByPriority(a: IntelligenceRow, b: IntelligenceRow): number {
+  if (b.risk_score !== a.risk_score) {
+    return b.risk_score - a.risk_score;
+  }
 
-  let score = amount;
+  const amountDiff = parseAmount(b.principal_amount) - parseAmount(a.principal_amount);
+  if (amountDiff !== 0) return amountDiff;
 
-  if (status === "pretrial") score += 200000;
-  if (status === "overdue") score += 100000;
-  if (status === "court") score += 50000;
+  return b.case_id - a.case_id;
+}
 
-  return score;
+function buildRowsFromDashboard(cases: any[], dashboard: any): IntelligenceRow[] {
+  const priorityItems = dashboard?.priority_cases?.items || [];
+  const priorityMap = new Map<number, any>();
+
+  for (const item of priorityItems) {
+    if (typeof item?.case_id === "number") {
+      priorityMap.set(item.case_id, item);
+    }
+  }
+
+  const routingBuckets = dashboard?.routing?.buckets || {};
+  const routingMap = new Map<number, { bucket: string; row: any }>();
+
+  for (const bucketKey of ["ready", "waiting", "blocked", "idle"]) {
+    const bucketItems = Array.isArray(routingBuckets?.[bucketKey])
+      ? routingBuckets[bucketKey]
+      : [];
+
+    for (const item of bucketItems) {
+      const caseId = Number(item?.case_id);
+      if (!Number.isFinite(caseId)) continue;
+      routingMap.set(caseId, { bucket: bucketKey, row: item });
+    }
+  }
+
+  const waitingItems = dashboard?.waiting_preview?.items || [];
+  const waitingMap = new Map<number, any[]>();
+
+  for (const item of waitingItems) {
+    const caseId = Number(item?.case_id);
+    if (!Number.isFinite(caseId)) continue;
+    if (!waitingMap.has(caseId)) waitingMap.set(caseId, []);
+    waitingMap.get(caseId)!.push(item);
+  }
+
+  return (cases || [])
+    .map((item: any) => {
+      const priority = priorityMap.get(item.id);
+      const routing = routingMap.get(item.id);
+      const waitingRows = waitingMap.get(item.id) || [];
+
+      if (!priority && !routing) {
+        return buildFallbackRow(item);
+      }
+
+      const status = String(priority?.status || item?.status || "draft");
+      const routingBucket = String(
+        routing?.bucket ||
+          (priority?.blocked ? "blocked" : waitingRows.length ? "waiting" : "general")
+      );
+
+      const blocked = routingBucket === "blocked" || Boolean(priority?.blocked);
+      const waiting = routingBucket === "waiting" || waitingRows.length > 0;
+      const courtLane = routingBucket === "court_lane" || status === "court";
+      const enforcementLane =
+        routingBucket === "enforcement_lane" || ["fssp", "enforcement"].includes(status);
+      const readyNow =
+        (routingBucket === "ready" ||
+          routingBucket === "active_collection" ||
+          ["overdue", "pretrial"].includes(status)) &&
+        !blocked &&
+        !waiting;
+
+      const signals: string[] = [];
+
+      if (Array.isArray(priority?.blocked_reasons)) {
+        signals.push(...priority.blocked_reasons.map((x: any) => String(x)));
+      }
+
+      for (const row of waitingRows) {
+        if (row?.reason) signals.push(String(row.reason));
+      }
+
+      const dedupSignals = Array.from(new Set(signals.filter(Boolean)));
+
+      return {
+        case_id: item.id,
+        debtor_name: String(priority?.debtor_name || item?.debtor_name || "—"),
+        status,
+        contract_type: String(priority?.contract_type || item?.contract_type || "—"),
+        debtor_type: String(priority?.debtor_type || item?.debtor_type || "—"),
+        principal_amount: String(priority?.principal_amount || item?.principal_amount || "0.00"),
+        due_date: priority?.due_date || item?.due_date || null,
+        risk_score: Number(priority?.risk_score || 0),
+        risk_level: String(priority?.risk_level || "low"),
+        signals: dedupSignals,
+        routing_bucket: routingBucket,
+        routing_status: blocked
+          ? "blocked"
+          : waiting
+            ? "waiting"
+            : readyNow
+              ? "eligible"
+              : "in_progress",
+        recommended_action: readyNow
+          ? "Открыть карточку и выполнить следующее действие"
+          : blocked
+            ? "Снять blocker’ы"
+            : waiting
+              ? "Контролировать eligible_at"
+              : courtLane
+                ? "Проверить судебный трек"
+                : enforcementLane
+                  ? "Проверить исполнительный трек"
+                  : "Проверить маршрут взыскания",
+        is_blocked: blocked,
+        is_waiting: waiting,
+        is_ready_now: readyNow,
+        is_court_lane: courtLane,
+        is_enforcement_lane: enforcementLane,
+        blocked_reasons: Array.isArray(priority?.blocked_reasons)
+          ? priority.blocked_reasons.map((x: any) => String(x))
+          : [],
+        is_archived: Boolean(priority?.is_archived || item?.is_archived),
+        inn: priority?.inn || null,
+        ogrn: priority?.ogrn || null,
+      };
+    })
+    .sort(sortByPriority);
 }
 
 export default function PortfolioOperationsPanel({
@@ -85,193 +257,210 @@ export default function PortfolioOperationsPanel({
   selectedCase,
   onOpenCase,
 }: Props) {
-  const buckets = buildBuckets(cases);
+  const [rows, setRows] = useState<IntelligenceRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const urgentCases = [...cases]
-    .filter((item: any) => ["overdue", "pretrial", "court"].includes(String(item?.status || "")))
-    .sort((a, b) => priorityScore(b) - priorityScore(a))
-    .slice(0, 5);
+  useEffect(() => {
+    let cancelled = false;
 
-  const blockedCases = [...buckets.blocked].slice(0, 5);
+    async function load() {
+      try {
+        setLoading(true);
+        const result = await getControlRoomDashboard();
+        if (cancelled) return;
+        setRows(buildRowsFromDashboard(cases || [], result || {}));
+      } catch {
+        if (cancelled) return;
+        setRows((cases || []).map(buildFallbackRow).sort(sortByPriority));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
 
-  const selectedCases = cases.filter((item: any) => selectedCaseIds.includes(item.id));
-  const selectedAmount = selectedCases.reduce(
-    (acc: number, item: any) => acc + parseAmount(item?.principal_amount),
-    0
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cases]);
+
+  const selectedRows = useMemo(
+    () => rows.filter((item) => selectedCaseIds.includes(item.case_id)),
+    [rows, selectedCaseIds]
+  );
+
+  const selectedAmount = useMemo(
+    () => selectedRows.reduce((acc, item) => acc + parseAmount(item.principal_amount), 0),
+    [selectedRows]
+  );
+
+  const urgentCases = useMemo(
+    () =>
+      [...rows]
+        .filter(
+          (item) =>
+            item.is_ready_now || item.is_court_lane || item.risk_level === "critical"
+        )
+        .sort(sortByPriority)
+        .slice(0, 5),
+    [rows]
+  );
+
+  const blockedCases = useMemo(
+    () => [...rows].filter((item) => item.is_blocked).sort(sortByPriority).slice(0, 5),
+    [rows]
+  );
+
+  const waitingCases = useMemo(
+    () => [...rows].filter((item) => item.is_waiting).sort(sortByPriority).slice(0, 5),
+    [rows]
   );
 
   return (
-    <section className="panel">
-      <div className="panel-title">Операционный слой портфеля</div>
-
-      <div className="ops-grid">
-        <div className="ops-card">
-          <div className="ops-card-title">Готово к взысканию</div>
-          <div className="ops-card-value">{buckets.readyNow.length}</div>
-          <div className="muted small">
-            Дела на стадии просрочки и досудебного взыскания, по которым можно работать сейчас
+    <section className="panel control-room-ops-panel">
+      <div className="section-header">
+        <div>
+          <div className="section-eyebrow">Operational triage</div>
+          <div className="panel-title" style={{ marginBottom: 6 }}>
+            Операционный triage
           </div>
-        </div>
-
-        <div className="ops-card">
-          <div className="ops-card-title">Ожидают срока</div>
-          <div className="ops-card-value">{buckets.waiting.length}</div>
-          <div className="muted small">
-            Дела, которые ещё не дошли до активного этапа взыскания
-          </div>
-        </div>
-
-        <div className="ops-card">
-          <div className="ops-card-title">Заблокированы</div>
-          <div className="ops-card-value">{buckets.blocked.length}</div>
-          <div className="muted small">
-            Не хватает ключевых реквизитов: должника, суммы, срока оплаты или идентификаторов
-          </div>
-        </div>
-
-        <div className="ops-card">
-          <div className="ops-card-title">Судебная стадия</div>
-          <div className="ops-card-value">{buckets.courtLane.length}</div>
-          <div className="muted small">Дела, уже переведённые в судебный трек</div>
-        </div>
-
-        <div className="ops-card">
-          <div className="ops-card-title">ФССП / исполнение</div>
-          <div className="ops-card-value">{buckets.fsspLane.length}</div>
-          <div className="muted small">
-            Дела в исполнительном производстве или на этапе передачи приставам
-          </div>
-        </div>
-
-        <div className="ops-card ops-card-accent">
-          <div className="ops-card-title">Выбранный пакет</div>
-          <div className="ops-card-value">{selectedCaseIds.length}</div>
-          <div className="muted small">
-            Совокупная сумма выбранных дел: {formatMoney(selectedAmount)} ₽
+          <div className="muted">
+            Пакетный фокус, срочные кейсы, blocked cleanup и waiting bucket.
           </div>
         </div>
       </div>
 
-      <div className="dashboard-grid" style={{ marginTop: 18, marginBottom: 0 }}>
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <div className="panel-title">Приоритетные дела</div>
+      {loading && (
+        <div className="empty-box" style={{ marginTop: 16 }}>
+          Загружаем операционный срез портфеля…
+        </div>
+      )}
+
+      <div className="portfolio-mini-stats control-room-ops-stats" style={{ marginTop: 16, marginBottom: 18 }}>
+        <div className="portfolio-mini-stat">
+          <span>Выбрано в пакет</span>
+          <strong>{selectedCaseIds.length}</strong>
+        </div>
+
+        <div className="portfolio-mini-stat">
+          <span>Сумма пакета</span>
+          <strong style={{ fontSize: 16 }}>{formatMoney(selectedAmount)} ₽</strong>
+        </div>
+
+        <div className="portfolio-mini-stat">
+          <span>Текущая карточка</span>
+          <strong>{selectedCase ? `#${selectedCase}` : "—"}</strong>
+        </div>
+      </div>
+
+      <div className="portfolio-triage-grid">
+        <div className="triage-column">
+          <div className="triage-column-head">
+            <div className="triage-column-title">Срочно брать в работу</div>
+            <div className="triage-column-count">{urgentCases.length}</div>
+          </div>
 
           {urgentCases.length ? (
-            <div className="related-cases-list">
-              {urgentCases.map((item: any) => (
+            <div className="triage-list">
+              {urgentCases.map((item) => (
                 <button
-                  key={item.id}
-                  className={`related-case-card ${selectedCase === item.id ? "is-current" : ""}`}
-                  onClick={() => onOpenCase(item.id)}
+                  key={item.case_id}
+                  className="triage-card"
+                  onClick={() => onOpenCase(item.case_id)}
                 >
-                  <div className="related-case-top">
-                    <strong>Дело #{item.id}</strong>
-                    <span className={`status-badge status-${item.status || "draft"}`}>
-                      {formatCaseStatus(item.status)}
+                  <div className="triage-card-top">
+                    <strong>Дело #{item.case_id}</strong>
+                    <span className={`risk-pill risk-${item.risk_level || "low"}`}>
+                      {riskLabel(item.risk_level)} · {item.risk_score}
                     </span>
                   </div>
 
-                  <div className="muted">{item.debtor_name || "—"}</div>
-                  <div className="muted small">
-                    {item.contract_type || "—"} · {item.principal_amount || "—"} ₽
+                  <div className="triage-card-name">{item.debtor_name || "—"}</div>
+
+                  <div className="triage-card-meta">
+                    {item.contract_type || "—"} · {formatDebtorType(item.debtor_type)} ·{" "}
+                    {item.principal_amount || "—"} ₽
+                  </div>
+
+                  <div className="triage-card-hint">
+                    {item.recommended_action || "Открыть карточку"}
                   </div>
                 </button>
               ))}
             </div>
           ) : (
-            <div className="empty-box">
-              Приоритетных дел по текущему фильтру пока нет.
-            </div>
+            <div className="empty-box">Срочных дел пока нет.</div>
           )}
         </div>
 
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <div className="panel-title">Дела с блокирующими проблемами</div>
+        <div className="triage-column">
+          <div className="triage-column-head">
+            <div className="triage-column-title">Blocked cleanup</div>
+            <div className="triage-column-count">{blockedCases.length}</div>
+          </div>
 
           {blockedCases.length ? (
-            <div className="related-cases-list">
-              {blockedCases.map((item: any) => (
+            <div className="triage-list">
+              {blockedCases.map((item) => (
                 <button
-                  key={item.id}
-                  className={`related-case-card ${selectedCase === item.id ? "is-current" : ""}`}
-                  onClick={() => onOpenCase(item.id)}
+                  key={item.case_id}
+                  className="triage-card"
+                  onClick={() => onOpenCase(item.case_id)}
                 >
-                  <div className="related-case-top">
-                    <strong>Дело #{item.id}</strong>
-                    <span className="status-badge status-not-ready">Требует доработки</span>
+                  <div className="triage-card-top">
+                    <strong>Дело #{item.case_id}</strong>
+                    <span className="status-badge status-not-ready">Blocked</span>
                   </div>
 
-                  <div className="muted">{item.debtor_name || "Должник не указан"}</div>
-                  <div className="muted small">
+                  <div className="triage-card-name">{item.debtor_name || "—"}</div>
+
+                  <div className="triage-card-meta">
                     {item.contract_type || "—"} · {item.principal_amount || "—"} ₽
+                  </div>
+
+                  <div className="triage-card-hint">
+                    {item.blocked_reasons?.[0] || item.signals?.[0] || "Требуется проверка"}
                   </div>
                 </button>
               ))}
             </div>
           ) : (
-            <div className="empty-box">
-              Явно заблокированных дел по текущему фильтру нет.
-            </div>
+            <div className="empty-box">Явно заблокированных дел нет.</div>
           )}
         </div>
-      </div>
 
-      <div className="dashboard-grid" style={{ marginTop: 18, marginBottom: 0 }}>
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <div className="panel-title">Операционные рекомендации</div>
-
-          <div className="ops-hints-list">
-            <div className="ops-hint-card">
-              <strong>Что брать в работу в первую очередь</strong>
-              <div className="muted small">
-                В первую очередь обрабатывай дела на стадии просрочки и досудебного взыскания с
-                наибольшей суммой и полными реквизитами.
-              </div>
-            </div>
-
-            <div className="ops-hint-card">
-              <strong>Что мешает движению дела</strong>
-              <div className="muted small">
-                Заблокированные дела обычно требуют добора ИНН/ОГРН, суммы, срока оплаты или
-                базовой структуры карточки дела.
-              </div>
-            </div>
-
-            <div className="ops-hint-card">
-              <strong>Как формировать пакетные действия</strong>
-              <div className="muted small">
-                Не смешивай в одном пакете досудебные, судебные и исполнительные действия.
-                Пакеты должны быть однородными по стадии взыскания.
-              </div>
-            </div>
+        <div className="triage-column">
+          <div className="triage-column-head">
+            <div className="triage-column-title">Waiting bucket</div>
+            <div className="triage-column-count">{waitingCases.length}</div>
           </div>
-        </div>
 
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <div className="panel-title">Сводка по стадиям</div>
+          {waitingCases.length ? (
+            <div className="triage-list">
+              {waitingCases.map((item) => (
+                <button
+                  key={item.case_id}
+                  className="triage-card"
+                  onClick={() => onOpenCase(item.case_id)}
+                >
+                  <div className="triage-card-top">
+                    <strong>Дело #{item.case_id}</strong>
+                    <span className="status-badge status-draft">Waiting</span>
+                  </div>
 
-          <div className="ops-hints-list">
-            <div className="ops-hint-card">
-              <strong>Ожидание</strong>
-              <div className="muted small">
-                {buckets.waiting.length} дел ещё не дошли до активного этапа взыскания.
-              </div>
+                  <div className="triage-card-name">{item.debtor_name || "—"}</div>
+
+                  <div className="triage-card-meta">
+                    {item.contract_type || "—"} · {item.principal_amount || "—"} ₽
+                  </div>
+
+                  <div className="triage-card-hint">{routingLabel(item.routing_bucket)}</div>
+                </button>
+              ))}
             </div>
-
-            <div className="ops-hint-card">
-              <strong>Судебное взыскание</strong>
-              <div className="muted small">
-                {buckets.courtLane.length} дел уже находятся в судебном треке.
-              </div>
-            </div>
-
-            <div className="ops-hint-card">
-              <strong>Исполнительное производство</strong>
-              <div className="muted small">
-                {buckets.fsspLane.length} дел находятся в треке ФССП / исполнения.
-              </div>
-            </div>
-          </div>
+          ) : (
+            <div className="empty-box">Waiting bucket пуст.</div>
+          )}
         </div>
       </div>
     </section>

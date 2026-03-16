@@ -51,6 +51,34 @@ export const FLAG_LABELS: Record<string, string> = {
   closed: "Дело завершено",
 };
 
+export const ACTION_CODE_LABELS: Record<string, string> = {
+  send_payment_due_notice: "Отправлено напоминание о сроке оплаты",
+  send_debt_notice: "Отправлено уведомление о задолженности",
+  send_pretension: "Отправлена досудебная претензия",
+  generate_lawsuit: "Сформированы судебные документы",
+  submit_to_court: "Материалы направлены в суд",
+  send_to_fssp: "Материалы направлены в ФССП",
+  send_russian_post_letter: "Отправлено письмо Почтой России",
+  identify_debtor: "Сохранены реквизиты должника",
+  refresh_debtor: "Обновлён профиль должника",
+  update_soft_policy: "Обновлены настройки soft stage",
+};
+
+export const EXECUTION_STATUS_LABELS: Record<string, string> = {
+  pending: "Ожидает выполнения",
+  queued: "Поставлено в очередь",
+  running: "Выполняется",
+  success: "Выполнено успешно",
+  completed: "Завершено",
+  blocked: "Заблокировано",
+  waiting: "Ожидает срока/окна",
+  already_processed: "Уже обработано",
+  not_applicable: "Не применимо",
+  failed: "Ошибка выполнения",
+  error: "Ошибка",
+  skipped: "Пропущено",
+};
+
 export function formatCaseStatus(status?: string, fallback = "—") {
   return CASE_STATUS_LABELS[status || ""] || status || fallback;
 }
@@ -73,4 +101,12 @@ export function formatParticipantRole(role?: string, fallback = "—") {
 
 export function formatDebtorType(value?: string, fallback = "—") {
   return DEBTOR_TYPE_LABELS[value || ""] || value || fallback;
+}
+
+export function formatActionCode(code?: string, fallback = "—") {
+  return ACTION_CODE_LABELS[code || ""] || code || fallback;
+}
+
+export function formatExecutionStatus(status?: string, fallback = "—") {
+  return EXECUTION_STATUS_LABELS[status || ""] || status || fallback;
 }

@@ -12,11 +12,21 @@ export default function SavedViewsPanel({
   onApply,
 }: Props) {
   return (
-    <section className="panel">
-      <div className="panel-title">Сохранённые виды</div>
+    <section className="panel control-room-saved-views-panel">
+      <div className="section-header">
+        <div>
+          <div className="section-eyebrow">Workspace presets</div>
+          <div className="panel-title" style={{ marginBottom: 6 }}>
+            Сохранённые виды
+          </div>
+          <div className="muted">
+            Готовые операционные срезы портфеля для ежедневной работы и batch-циклов.
+          </div>
+        </div>
+      </div>
 
       {items.length ? (
-        <div className="saved-views-grid">
+        <div className="saved-views-grid" style={{ marginTop: 14 }}>
           {items.map((item) => (
             <button
               key={item.id}
@@ -27,19 +37,21 @@ export default function SavedViewsPanel({
                 <strong>{item.title}</strong>
 
                 {item.is_default ? (
-                  <span className="status-badge status-ready">Default</span>
+                  <span className="status-badge status-ready">По умолчанию</span>
                 ) : (
-                  <span className="status-badge status-not-ready">View</span>
+                  <span className="status-badge status-not-ready">Вид</span>
                 )}
               </div>
 
               <div className="muted">{item.description || "Без описания"}</div>
 
-              <div className="muted small" style={{ marginTop: 8 }}>
-                Фильтры:{" "}
-                {item.filters && Object.keys(item.filters).length
-                  ? Object.keys(item.filters).join(", ")
-                  : "нет"}
+              <div className="saved-view-meta">
+                <span>
+                  Фильтры:{" "}
+                  {item.filters && Object.keys(item.filters).length
+                    ? Object.keys(item.filters).join(", ")
+                    : "нет"}
+                </span>
               </div>
             </button>
           ))}

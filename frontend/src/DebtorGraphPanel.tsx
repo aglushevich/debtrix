@@ -6,6 +6,16 @@ type Props = {
   onOpenCase?: (caseId: number) => void;
 };
 
+function riskLabel(level?: string) {
+  const map: Record<string, string> = {
+    low: "Низкий",
+    medium: "Средний",
+    high: "Высокий",
+    critical: "Критический",
+  };
+  return map[level || ""] || level || "—";
+}
+
 export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -41,6 +51,7 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
   const autoLinks = data?.auto_links || [];
   const relatedCases = data?.related_cases || [];
   const summary = data?.summary || {};
+  const recommendations = data?.recommendations || [];
 
   return (
     <section className="panel">
@@ -53,30 +64,35 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
         <>
           <div className="debtor-cases-summary" style={{ marginBottom: 16 }}>
             <div className="summary-card">
-              <span className="label">Cases</span>
+              <span className="label">Связанных дел</span>
               <strong>{summary?.cases_count ?? relatedCases.length}</strong>
             </div>
 
             <div className="summary-card">
-              <span className="label">Participants</span>
+              <span className="label">Участников</span>
               <strong>{summary?.participants_count ?? "—"}</strong>
             </div>
 
             <div className="summary-card">
-              <span className="label">Risk</span>
+              <span className="label">Auto links</span>
+              <strong>{summary?.auto_links_count ?? autoLinks.length}</strong>
+            </div>
+
+            <div className="summary-card">
+              <span className="label">Риск</span>
               <strong>
-                {summary?.risk_level || "—"} / {summary?.risk_score ?? "—"}
+                {riskLabel(summary?.risk_level)} / {summary?.risk_score ?? "—"}
               </strong>
             </div>
           </div>
 
           <div className="dashboard-grid">
             <div className="panel">
-              <div className="panel-title">Debtor</div>
+              <div className="panel-title">Карточка должника</div>
 
               <div className="info-grid">
                 <div className="info-item info-item-wide">
-                  <span className="label">Name</span>
+                  <span className="label">Наименование</span>
                   <strong>{data?.debtor?.name || "—"}</strong>
                 </div>
 
@@ -95,6 +111,11 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
                   <strong>{data?.debtor?.ogrn || "—"}</strong>
                 </div>
 
+                <div className="info-item">
+                  <span className="label">Руководитель</span>
+                  <strong>{data?.debtor?.director_name || "—"}</strong>
+                </div>
+
                 <div className="info-item info-item-wide">
                   <span className="label">Адрес</span>
                   <strong>{data?.debtor?.address || "—"}</strong>
@@ -103,7 +124,7 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
             </div>
 
             <div className="panel">
-              <div className="panel-title">Signals</div>
+              <div className="panel-title">Сигналы</div>
 
               {summary?.signals?.length ? (
                 <div className="participants-list">
@@ -183,7 +204,7 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
             </div>
 
             <div className="panel">
-              <div className="panel-title">Related cases</div>
+              <div className="panel-title">Связанные дела</div>
 
               {relatedCases.length ? (
                 <div className="related-cases-list">
@@ -205,7 +226,7 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
                       </div>
 
                       <div className="muted small">
-                        due: {item.due_date || "—"}
+                        Срок оплаты: {item.due_date || "—"}
                       </div>
                     </button>
                   ))}
@@ -214,6 +235,22 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
                 <div className="empty-box">Связанных дел не найдено.</div>
               )}
             </div>
+          </div>
+
+          <div className="panel" style={{ marginTop: 16 }}>
+            <div className="panel-title">Рекомендации intelligence engine</div>
+
+            {recommendations.length ? (
+              <div className="participants-list">
+                {recommendations.map((item: string, index: number) => (
+                  <div className="participant-card" key={`${item}-${index}`}>
+                    <div className="participant-name">{item}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty-box">Рекомендаций пока нет.</div>
+            )}
           </div>
         </>
       )}

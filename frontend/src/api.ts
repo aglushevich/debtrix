@@ -374,7 +374,9 @@ export type BatchRunResponse = {
     status: string;
     reason?: string | null;
     eligible_at?: string | null;
+    payload?: Record<string, any> | null;
   }>;
+  summary?: Record<string, number>;
 };
 
 export type PortfolioFilters = {
@@ -403,27 +405,30 @@ export type PolicyTiming = {
   pretension_eligible_at?: string | null;
 };
 
-export type PortfolioRoutingBucket = {
-  key: string;
-  title: string;
-  count: number;
+export type PortfolioRoutingCaseItem = {
+  case_id: number;
+  debtor_name?: string;
+  contract_type?: string;
+  debtor_type?: string;
+  status?: string;
+  routing_status?: string;
+  is_archived?: boolean;
 };
 
 export type PortfolioRoutingResponse = {
-  buckets: PortfolioRoutingBucket[];
-};
-
-export type ExecutionConsoleRun = {
-  id: number;
-  title: string;
-  action_code: string;
-  created_at: string;
-  status: string;
-  total: number;
-  success: number;
-  blocked: number;
-  waiting: number;
-  errors: number;
+  summary?: {
+    total?: number;
+    ready?: number;
+    waiting?: number;
+    blocked?: number;
+    idle?: number;
+  };
+  buckets?: {
+    ready?: PortfolioRoutingCaseItem[];
+    waiting?: PortfolioRoutingCaseItem[];
+    blocked?: PortfolioRoutingCaseItem[];
+    idle?: PortfolioRoutingCaseItem[];
+  };
 };
 
 export type WaitingBucketItem = {
@@ -438,6 +443,76 @@ export type WaitingBucketItem = {
 
 export type WaitingBucketsResponse = {
   items: WaitingBucketItem[];
+};
+
+export type ControlRoomSummary = {
+  total_cases?: number;
+  active_cases?: number;
+  archived_cases?: number;
+  draft_cases?: number;
+  overdue_cases?: number;
+  pretrial_cases?: number;
+  court_cases?: number;
+  fssp_cases?: number;
+  closed_cases?: number;
+  blocked_cases?: number;
+  overdue_now_cases?: number;
+  total_principal_amount?: string;
+  average_principal_amount?: string;
+};
+
+export type ControlRoomPriorityCase = {
+  case_id: number;
+  debtor_name?: string;
+  status?: string;
+  contract_type?: string;
+  debtor_type?: string;
+  principal_amount?: string;
+  due_date?: string | null;
+  risk_score?: number;
+  risk_level?: string;
+  blocked?: boolean;
+  blocked_reasons?: string[];
+  inn?: string | null;
+  ogrn?: string | null;
+  is_archived?: boolean;
+};
+
+export type ControlRoomExecutionConsoleResponse = {
+  batch_jobs?: Array<{
+    id: number;
+    title?: string;
+    job_type?: string | null;
+    status?: string;
+    created_at?: string | null;
+    started_at?: string | null;
+    finished_at?: string | null;
+    summary?: Record<string, number>;
+    success?: number;
+    blocked?: number;
+    waiting?: number;
+    errors?: number;
+    not_applicable?: number;
+    already_processed?: number;
+  }>;
+  batch_metrics?: Record<string, number>;
+  automation_metrics?: Record<string, number>;
+};
+
+export type ControlRoomDashboardResponse = {
+  summary?: ControlRoomSummary;
+  routing?: PortfolioRoutingResponse;
+  waiting_preview?: WaitingBucketsResponse;
+  execution?: ControlRoomExecutionConsoleResponse;
+  priority_cases?: {
+    items?: ControlRoomPriorityCase[];
+    total?: number;
+  };
+  intelligence_kpi?: {
+    high_risk_cases?: number;
+    critical_cases?: number;
+    blocked_high_risk_cases?: number;
+  };
 };
 
 function normalizeSavedView(item: any): SavedViewItem {
@@ -925,184 +1000,85 @@ export async function updateSoftPolicy(
 }
 
 export async function getPortfolioRouting(): Promise<PortfolioRoutingResponse> {
-  return {
-    buckets: [
-      { key: "eligible_now", title: "Eligible now", count: 12 },
-      { key: "waiting", title: "Waiting", count: 4 },
-      { key: "blocked", title: "Blocked", count: 3 },
-      { key: "not_applicable", title: "Not applicable", count: 1 },
-      { key: "already_processed", title: "Already processed", count: 2 },
-    ],
-  };
+  const res = await fetch(`${API_BASE}/portfolio/routing`);
+  return safeParseOrFallback(res, {
+    summary: { total: 0, ready: 0, waiting: 0, blocked: 0, idle: 0 },
+    buckets: { ready: [], waiting: [], blocked: [], idle: [] },
+  });
 }
 
-export async function getExecutionConsoleRuns(): Promise<ExecutionConsoleRun[]> {
-  return [
-    {
-      id: 24,
-      title: "Пакет ФССП по выбранным делам",
-      action_code: "send_to_fssp",
-      created_at: "2026-03-14T10:15:00",
-      status: "completed",
-      total: 74,
-      success: 52,
-      blocked: 14,
-      waiting: 6,
-      errors: 2,
+export async function getControlRoomSummary(): Promise<ControlRoomSummary> {
+  const res = await fetch(`${API_BASE}/control-room/summary`);
+  return safeParseOrFallback(res, {});
+}
+
+export async function getControlRoomDashboard(): Promise<ControlRoomDashboardResponse> {
+  const res = await fetch(`${API_BASE}/control-room/dashboard`);
+  return safeParseOrFallback(res, {
+    summary: {},
+    routing: {
+      summary: { total: 0, ready: 0, waiting: 0, blocked: 0, idle: 0 },
+      buckets: {
+        ready: [],
+        waiting: [],
+        blocked: [],
+        idle: [],
+      },
     },
-    {
-      id: 23,
-      title: "Подача в суд",
-      action_code: "submit_to_court",
-      created_at: "2026-03-13T18:40:00",
-      status: "completed",
-      total: 31,
-      success: 22,
-      blocked: 5,
-      waiting: 3,
-      errors: 1,
+    waiting_preview: { items: [] },
+    execution: {
+      batch_jobs: [],
+      batch_metrics: {},
+      automation_metrics: {},
     },
-    {
-      id: 22,
-      title: "Письма Почтой России",
-      action_code: "send_russian_post_letter",
-      created_at: "2026-03-13T11:20:00",
-      status: "completed",
-      total: 18,
-      success: 15,
-      blocked: 2,
-      waiting: 0,
-      errors: 1,
-    },
-  ];
+    priority_cases: { items: [], total: 0 },
+    intelligence_kpi: {},
+  });
+}
+
+export async function getExecutionConsoleRuns(): Promise<ControlRoomExecutionConsoleResponse> {
+  const res = await fetch(`${API_BASE}/control-room/execution-console`);
+  return safeParseOrFallback(res, {
+    batch_jobs: [],
+    batch_metrics: {},
+    automation_metrics: {},
+  });
 }
 
 export async function getWaitingBuckets(): Promise<WaitingBucketsResponse> {
-  return {
-    items: [
-      {
-        case_id: 148,
-        debtor_name: 'ООО "СтройТехСнаб"',
-        step_code: "payment_due_notice",
-        bucket_code: "waiting",
-        reason: "Ожидаем наступления даты первого напоминания",
-        eligible_at: "2026-03-18",
-        principal_amount: "124000.00",
-      },
-      {
-        case_id: 141,
-        debtor_name: 'ООО "Сигма"',
-        step_code: "debt_notice",
-        bucket_code: "waiting",
-        reason: "Ещё не истёк лаг до уведомления о задолженности",
-        eligible_at: "2026-03-20",
-        principal_amount: "86000.00",
-      },
-      {
-        case_id: 133,
-        debtor_name: "ИП Петров А.В.",
-        step_code: "pretension",
-        bucket_code: "waiting",
-        reason: "Досудебная претензия станет доступна после soft stage",
-        eligible_at: "2026-03-23",
-        principal_amount: "219000.00",
-      },
-      {
-        case_id: 126,
-        debtor_name: 'ООО "ТехИмпорт"',
-        step_code: "submit_to_court",
-        bucket_code: "waiting",
-        reason: "Ожидается окончание досудебного срока",
-        eligible_at: "2026-03-28",
-        principal_amount: "430000.00",
-      },
-    ],
-  };
+  const res = await fetch(`${API_BASE}/portfolio/waiting-buckets`);
+  return safeParseOrFallback(res, { items: [] });
 }
 
 export async function previewBatchExecution(payload: {
   action_code: string;
   case_ids: number[];
 }): Promise<BatchPreviewResponse> {
-  const total = payload.case_ids.length;
+  const res = await fetch(`${API_BASE}/batch-actions/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
 
-  return {
-    ok: true,
-    action_code: payload.action_code,
-    total_selected: total,
-    preview: {
-      eligible_now: {
-        key: "eligible_now",
-        title: "Готово к запуску",
-        count: total,
-        case_ids: payload.case_ids,
-      },
-      waiting: {
-        key: "waiting",
-        title: "Ожидают",
-        count: 0,
-        case_ids: [],
-      },
-      blocked: {
-        key: "blocked",
-        title: "Заблокированы",
-        count: 0,
-        case_ids: [],
-      },
-      not_applicable: {
-        key: "not_applicable",
-        title: "Не применимо",
-        count: 0,
-        case_ids: [],
-      },
-      already_processed: {
-        key: "already_processed",
-        title: "Уже обработаны",
-        count: 0,
-        case_ids: [],
-      },
-    },
-    items: payload.case_ids.map((caseId) => ({
-      case_id: caseId,
-      bucket: "eligible_now",
-      reason: null,
-      eligible_at: null,
-    })),
-  };
+  return parseResponse<BatchPreviewResponse>(res);
 }
 
 export async function runBatchExecution(payload: {
   action_code: string;
   case_ids: number[];
+  force?: boolean;
 }): Promise<BatchRunResponse> {
-  const results = await Promise.all(
-    payload.case_ids.map(async (caseId) => {
-      try {
-        await applyAction(caseId, payload.action_code);
-        return {
-          case_id: caseId,
-          status: "success",
-          reason: null,
-          eligible_at: null,
-        };
-      } catch (e: any) {
-        return {
-          case_id: caseId,
-          status: "error",
-          reason: e?.message || "Не удалось выполнить действие",
-          eligible_at: null,
-        };
-      }
-    })
-  );
+  const res = await fetch(`${API_BASE}/batch-actions/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_code: payload.action_code,
+      case_ids: payload.case_ids,
+      force: Boolean(payload.force),
+    }),
+  });
 
-  return {
-    ok: true,
-    action_code: payload.action_code,
-    total_selected: payload.case_ids.length,
-    queued: payload.case_ids.length,
-    results,
-  };
+  return parseResponse<BatchRunResponse>(res);
 }
 
 export async function getPortfolioCases(filters: PortfolioFilters = {}) {

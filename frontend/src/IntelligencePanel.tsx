@@ -30,6 +30,16 @@ function stat(value: any, fallback = "—") {
   return String(value);
 }
 
+function riskLabel(level?: string) {
+  const map: Record<string, string> = {
+    low: "Низкий",
+    medium: "Средний",
+    high: "Высокий",
+    critical: "Критический",
+  };
+  return map[level || ""] || level || "—";
+}
+
 export default function IntelligencePanel({ dashboard }: Props) {
   const intelligence = dashboard?.debtor_intelligence || {};
   const starterKit = dashboard?.organization_starter_kit || {};
@@ -37,13 +47,17 @@ export default function IntelligencePanel({ dashboard }: Props) {
   const nextStep = dashboard?.next_step || null;
   const stage = dashboard?.stage || {};
   const debtorRegistry = dashboard?.debtor_registry || {};
-  const debtor = debtorRegistry?.debtor || null;
+  const debtor = intelligence?.debtor || debtorRegistry?.debtor || null;
   const summary = debtorRegistry?.summary || {};
   const caseData = dashboard?.case || {};
 
   const signals = intelligence?.signals || starterKit?.signals || [];
   const graphHints = intelligence?.graph_hints || starterKit?.graph_hints || [];
-  const recommendations = starterKit?.recommendations || [];
+  const recommendations = intelligence?.recommendations || starterKit?.recommendations || [];
+  const readiness = starterKit?.readiness || {};
+  const readinessSummary = starterKit?.summary || {};
+  const riskScore = intelligence?.summary?.risk_score;
+  const riskLevel = intelligence?.summary?.risk_level;
 
   return (
     <aside className="intelligence-rail">
@@ -73,6 +87,29 @@ export default function IntelligencePanel({ dashboard }: Props) {
               <span>Совокупная сумма</span>
               <strong>{stat(summary?.total_principal_amount, "0.00")} ₽</strong>
             </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="rail-panel">
+        <div className="rail-panel-title">Risk profile</div>
+
+        <div className="rail-info-list">
+          <div className="rail-info-row">
+            <span>Risk level</span>
+            <strong>{riskLabel(riskLevel)}</strong>
+          </div>
+          <div className="rail-info-row">
+            <span>Risk score</span>
+            <strong>{stat(riskScore, "0")} / 100</strong>
+          </div>
+          <div className="rail-info-row">
+            <span>Participants</span>
+            <strong>{stat(intelligence?.summary?.participants_count, "0")}</strong>
+          </div>
+          <div className="rail-info-row">
+            <span>Auto links</span>
+            <strong>{stat(intelligence?.summary?.auto_links_count, "0")}</strong>
           </div>
         </div>
       </section>
@@ -119,6 +156,29 @@ export default function IntelligencePanel({ dashboard }: Props) {
           <div className="rail-info-row">
             <span>Дата доступности</span>
             <strong>{routing?.eligible_at || "—"}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="rail-panel">
+        <div className="rail-panel-title">Readiness должника</div>
+
+        <div className="rail-info-list">
+          <div className="rail-info-row">
+            <span>Уровень</span>
+            <strong>{readiness?.level || "—"}</strong>
+          </div>
+          <div className="rail-info-row">
+            <span>Готовность</span>
+            <strong>{readiness?.ready ? "Да" : "Нет"}</strong>
+          </div>
+          <div className="rail-info-row">
+            <span>Completion</span>
+            <strong>{stat(readinessSummary?.completion_percent, "0")}%</strong>
+          </div>
+          <div className="rail-info-row">
+            <span>Missing fields</span>
+            <strong>{stat(readinessSummary?.missing_fields_count, "0")}</strong>
           </div>
         </div>
       </section>

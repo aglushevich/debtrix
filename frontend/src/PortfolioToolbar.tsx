@@ -22,14 +22,15 @@ export default function PortfolioToolbar({
   }
 
   return (
-    <section className="panel">
+    <section className="panel control-room-toolbar-panel">
       <div className="portfolio-toolbar-header">
         <div>
+          <div className="section-eyebrow">Portfolio filters</div>
           <div className="panel-title" style={{ marginBottom: 6 }}>
-            Портфель дел
+            Фильтры и сохранённые срезы
           </div>
           <div className="muted">
-            Фильтруй портфель, формируй операционные срезы и сохраняй виды.
+            Формируй операционные выборки, очищай шум и сохраняй рабочие виды.
           </div>
         </div>
       </div>

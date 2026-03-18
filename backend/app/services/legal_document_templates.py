@@ -6,8 +6,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.app.models import Case, DebtorProfile
-from backend.app.services.creditor_profile_service import get_creditor_profile
+from backend.app.models.case import Case
+from backend.app.models.creditor_profile import CreditorProfile
+from backend.app.models.debtor_profile import DebtorProfile
 from backend.app.services.document_catalog_service import get_document_title_ru
 
 
@@ -45,43 +46,89 @@ def _format_money(value: Any) -> str:
     return normalized.replace(",", " ").replace(".", ",")
 
 
-def _extract_creditor(case: Case) -> dict[str, Any]:
+def _extract_creditor(
+    db: Session,
+    tenant_id: int | None,
+    case: Case,
+) -> dict[str, Any]:
+    profile = None
+    if tenant_id is not None:
+        profile = (
+            db.query(CreditorProfile)
+            .filter(CreditorProfile.tenant_id == tenant_id)
+            .order_by(CreditorProfile.id.desc())
+            .first()
+        )
+
     contract_data = dict(case.contract_data or {})
     creditor = dict(contract_data.get("creditor") or {})
-    signer = dict(creditor.get("signer") or {})
-
-    signer_name = (
-        signer.get("name")
-        or creditor.get("signer_name")
-        or "Уполномоченное лицо"
-    )
-    signer_basis = (
-        signer.get("basis")
-        or creditor.get("signer_basis")
-        or "действует на основании полномочий"
-    )
 
     return {
-        "name": creditor.get("name") or "Кредитор",
-        "name_full": creditor.get("name_full") or creditor.get("name") or "Кредитор",
-        "name_short": creditor.get("name_short") or creditor.get("name") or "Кредитор",
-        "inn": creditor.get("inn") or "—",
-        "ogrn": creditor.get("ogrn") or "—",
-        "kpp": creditor.get("kpp") or "—",
-        "address": creditor.get("address") or "—",
-        "bank_name": creditor.get("bank_name") or "—",
-        "bank_bik": creditor.get("bank_bik") or "—",
-        "bank_account": creditor.get("bank_account") or "—",
-        "bank_corr_account": creditor.get("bank_corr_account") or "—",
-        "email": creditor.get("email") or "—",
-        "phone": creditor.get("phone") or "—",
-        "signer_name": signer_name,
-        "signer_basis": signer_basis,
-        "signer": {
-            "name": signer_name,
-            "position": signer.get("position") or creditor.get("signer_position") or "—",
-            "basis": signer_basis,
-        },
+        "name": (
+            (profile.company_name if profile else None)
+            or creditor.get("name")
+            or "Кредитор"
+        ),
+        "inn": (
+            (profile.inn if profile else None)
+            or creditor.get("inn")
+            or "—"
+        ),
+        "ogrn": (
+            (profile.ogrn if profile else None)
+            or creditor.get("ogrn")
+            or "—"
+        ),
+        "kpp": (
+            (profile.kpp if profile else None)
+            or creditor.get("kpp")
+            or "—"
+        ),
+        "address": (
+            (profile.address if profile else None)
+            or creditor.get("address")
+            or "—"
+        ),
+        "signer_name": (
+            (profile.signer_name if profile else None)
+            or creditor.get("signer_name")
+            or "Уполномоченное лицо"
+        ),
+        "signer_basis": (
+            (profile.signer_basis if profile else None)
+            or creditor.get("signer_basis")
+            or "действует на основании полномочий"
+        ),
+        "email": (
+            (profile.email if profile else None)
+            or creditor.get("email")
+            or "—"
+        ),
+        "phone": (
+            (profile.phone if profile else None)
+            or creditor.get("phone")
+            or "—"
+        ),
+        "bank_name": (
+            (profile.bank_name if profile else None)
+            or creditor.get("bank_name")
+            or "—"
+        ),
+        "bank_bik": (
+            (profile.bank_bik if profile else None)
+            or creditor.get("bank_bik")
+            or "—"
+        ),
+        "bank_account": (
+            (profile.bank_account if profile else None)
+            or creditor.get("bank_account")
+            or "—"
+        ),
+        "correspondent_account": (
+            (profile.correspondent_account if profile else None)
+            or creditor.get("correspondent_account")
+            or "—"
+        ),
     }
 
 
@@ -90,25 +137,39 @@ def _extract_debtor(case: Case, debtor_profile: DebtorProfile | None) -> dict[st
     debtor_block = dict(contract_data.get("debtor") or {})
 
     return {
-        "name": (debtor_profile.name if debtor_profile else None)
-        or debtor_block.get("name_full")
-        or debtor_block.get("name")
-        or case.debtor_name
-        or "Должник",
-        "inn": (debtor_profile.inn if debtor_profile else None) or debtor_block.get("inn") or "—",
-        "ogrn": (debtor_profile.ogrn if debtor_profile else None) or debtor_block.get("ogrn") or "—",
-        "address": (debtor_profile.address if debtor_profile else None)
-        or debtor_block.get("address")
-        or "—",
-        "director_name": (debtor_profile.director_name if debtor_profile else None)
-        or debtor_block.get("director_name")
-        or "—",
+        "name": (
+            (debtor_profile.name if debtor_profile else None)
+            or debtor_block.get("name_full")
+            or debtor_block.get("name")
+            or case.debtor_name
+            or "Должник"
+        ),
+        "inn": (
+            (debtor_profile.inn if debtor_profile else None)
+            or debtor_block.get("inn")
+            or "—"
+        ),
+        "ogrn": (
+            (debtor_profile.ogrn if debtor_profile else None)
+            or debtor_block.get("ogrn")
+            or "—"
+        ),
+        "address": (
+            (debtor_profile.address if debtor_profile else None)
+            or debtor_block.get("address")
+            or "—"
+        ),
+        "director_name": (
+            (debtor_profile.director_name if debtor_profile else None)
+            or debtor_block.get("director_name")
+            or "—"
+        ),
     }
 
 
 def _base_context(
     db: Session,
-    tenant_id: int,
+    tenant_id: int | None,
     case: Case,
     projection: dict[str, Any],
     debtor_profile: DebtorProfile | None,
@@ -125,7 +186,9 @@ def _base_context(
         "debtor": debtor,
         "document_date": _format_date(datetime.utcnow()),
         "due_date": _format_date(case.due_date or case_data.get("due_date")),
-        "principal_amount": _format_money(case.principal_amount or case_data.get("principal_amount")),
+        "principal_amount": _format_money(
+            case.principal_amount or case_data.get("principal_amount")
+        ),
         "contract_type": getattr(case.contract_type, "value", case.contract_type) or "—",
         "debtor_type": getattr(case.debtor_type, "value", case.debtor_type) or "—",
     }
@@ -144,6 +207,7 @@ def _payment_due_notice(context: dict[str, Any]) -> dict[str, Any]:
             f"Адрес: {debtor['address']}",
             "",
             f"От: {creditor['name']}",
+            f"ИНН/ОГРН: {creditor['inn']} / {creditor['ogrn']}",
             f"Адрес: {creditor['address']}",
             "",
             "УВЕДОМЛЕНИЕ",
@@ -155,7 +219,8 @@ def _payment_due_notice(context: dict[str, Any]) -> dict[str, Any]:
             "Настоящее уведомление направляется в рамках досудебной работы по урегулированию задолженности.",
             "",
             f"Дата: {context['document_date']}",
-            f"{creditor['signer_position']}: {creditor['signer_name']}",
+            f"{creditor['signer_name']}",
+            creditor["signer_basis"],
         ],
     }
 
@@ -186,7 +251,8 @@ def _debt_notice(context: dict[str, Any]) -> dict[str, Any]:
             "При отсутствии оплаты кредитор оставляет за собой право перейти к следующей стадии взыскания и подготовке досудебной претензии.",
             "",
             f"Дата: {context['document_date']}",
-            f"{creditor['signer_position']}: {creditor['signer_name']}",
+            f"{creditor['signer_name']}",
+            creditor["signer_basis"],
         ],
     }
 
@@ -201,10 +267,11 @@ def _pretension(context: dict[str, Any]) -> dict[str, Any]:
         "file_stub": "dosudebnaya_pretenziya",
         "paragraphs": [
             f"Кому: {debtor['name']}",
+            f"ИНН/ОГРН: {debtor['inn']} / {debtor['ogrn']}",
             f"Адрес: {debtor['address']}",
             "",
-            f"От: {creditor['name_full']}",
-            f"ИНН/ОГРН/КПП: {creditor['inn']} / {creditor['ogrn']} / {creditor['kpp']}",
+            f"От: {creditor['name']}",
+            f"ИНН/ОГРН: {creditor['inn']} / {creditor['ogrn']}",
             f"Адрес: {creditor['address']}",
             "",
             "ДОСУДЕБНАЯ ПРЕТЕНЗИЯ",
@@ -216,8 +283,8 @@ def _pretension(context: dict[str, Any]) -> dict[str, Any]:
             "В случае неисполнения настоящей претензии в установленный срок кредитор будет вынужден обратиться в суд за защитой своих прав и взысканием задолженности, а также судебных расходов.",
             "",
             f"Дата: {context['document_date']}",
-            f"{creditor['signer_position']}, {creditor['signer_name']}",
-            f"{creditor['signer_basis']}",
+            f"{creditor['signer_name']}",
+            creditor["signer_basis"],
         ],
     }
 
@@ -233,8 +300,8 @@ def _lawsuit(context: dict[str, Any]) -> dict[str, Any]:
         "paragraphs": [
             "В суд по подсудности",
             "",
-            f"Истец: {creditor['name_full']}",
-            f"ИНН/ОГРН/КПП: {creditor['inn']} / {creditor['ogrn']} / {creditor['kpp']}",
+            f"Истец: {creditor['name']}",
+            f"ИНН/ОГРН: {creditor['inn']} / {creditor['ogrn']}",
             f"Адрес: {creditor['address']}",
             "",
             f"Ответчик: {debtor['name']}",
@@ -251,8 +318,8 @@ def _lawsuit(context: dict[str, Any]) -> dict[str, Any]:
             "Приложения подлежат формированию по составу документов дела и правилам соответствующего вида судопроизводства.",
             "",
             f"Дата: {context['document_date']}",
-            f"Подписант: {creditor['signer_position']}, {creditor['signer_name']}",
-            f"{creditor['signer_basis']}",
+            f"Подпись: {creditor['signer_name']}",
+            creditor["signer_basis"],
         ],
     }
 
@@ -268,11 +335,12 @@ def _court_order(context: dict[str, Any]) -> dict[str, Any]:
         "paragraphs": [
             "Мировому судье / в суд по подсудности",
             "",
-            f"Заявитель: {creditor['name_full']}",
-            f"ИНН/ОГРН/КПП: {creditor['inn']} / {creditor['ogrn']} / {creditor['kpp']}",
+            f"Заявитель: {creditor['name']}",
+            f"ИНН/ОГРН: {creditor['inn']} / {creditor['ogrn']}",
             f"Адрес: {creditor['address']}",
             "",
             f"Должник: {debtor['name']}",
+            f"ИНН/ОГРН: {debtor['inn']} / {debtor['ogrn']}",
             f"Адрес: {debtor['address']}",
             "",
             "ЗАЯВЛЕНИЕ",
@@ -283,8 +351,8 @@ def _court_order(context: dict[str, Any]) -> dict[str, Any]:
             "Прошу выдать судебный приказ о взыскании задолженности и иных сумм, подлежащих взысканию в приказном порядке.",
             "",
             f"Дата: {context['document_date']}",
-            f"Подписант: {creditor['signer_position']}, {creditor['signer_name']}",
-            f"{creditor['signer_basis']}",
+            f"Подпись: {creditor['signer_name']}",
+            creditor["signer_basis"],
         ],
     }
 
@@ -299,8 +367,8 @@ def _fssp_application(context: dict[str, Any]) -> dict[str, Any]:
         "paragraphs": [
             "В территориальный орган ФССП России",
             "",
-            f"От взыскателя: {creditor['name_full']}",
-            f"ИНН/ОГРН/КПП: {creditor['inn']} / {creditor['ogrn']} / {creditor['kpp']}",
+            f"От взыскателя: {creditor['name']}",
+            f"ИНН/ОГРН: {creditor['inn']} / {creditor['ogrn']}",
             f"Адрес: {creditor['address']}",
             "",
             "ЗАЯВЛЕНИЕ",
@@ -311,8 +379,8 @@ def _fssp_application(context: dict[str, Any]) -> dict[str, Any]:
             "Просим осуществить исполнительные действия в порядке, установленном законодательством об исполнительном производстве.",
             "",
             f"Дата: {context['document_date']}",
-            f"Подписант: {creditor['signer_position']}, {creditor['signer_name']}",
-            f"{creditor['signer_basis']}",
+            f"Подпись: {creditor['signer_name']}",
+            creditor["signer_basis"],
         ],
     }
 
@@ -330,7 +398,7 @@ _TEMPLATE_BUILDERS = {
 def build_legal_document_template(
     *,
     db: Session,
-    tenant_id: int,
+    tenant_id: int | None,
     document_code: str,
     case: Case,
     projection: dict[str, Any],

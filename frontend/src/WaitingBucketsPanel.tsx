@@ -1,29 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { WaitingBucketItem, getWaitingBuckets } from "./api";
+import {
+  buildWaitingHint,
+  formatEligibleAt,
+  formatWaitingStep,
+  waitingBadgeLabel,
+} from "./waitingEngine";
 
 type Props = {
   onOpenCase: (caseId: number) => void;
 };
 
-function formatStep(step?: string) {
-  const map: Record<string, string> = {
-    payment_due_notice: "1-е напоминание",
-    debt_notice: "Уведомление о задолженности",
-    pretension: "Досудебная претензия",
-    generate_lawsuit: "Подготовка иска",
-    submit_to_court: "Подача в суд",
-    send_to_fssp: "Отправка в ФССП",
-  };
-  return map[step || ""] || step || "—";
-}
+function formatMoney(value: any): string {
+  const num = Number(String(value ?? 0).replace(",", "."));
+  if (!Number.isFinite(num)) return "0.00";
 
-function formatDateTime(value?: string | null) {
-  if (!value) return "—";
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-
-  return date.toLocaleString("ru-RU");
+  return num.toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 export default function WaitingBucketsPanel({ onOpenCase }: Props) {
@@ -53,7 +48,14 @@ export default function WaitingBucketsPanel({ onOpenCase }: Props) {
       map.get(key)!.push(item);
     }
 
-    return [...map.entries()];
+    return [...map.entries()].map(([step, stepItems]) => [
+      step,
+      [...stepItems].sort((a, b) => {
+        const aTime = a.eligible_at ? new Date(a.eligible_at).getTime() : 0;
+        const bTime = b.eligible_at ? new Date(b.eligible_at).getTime() : 0;
+        return aTime - bTime;
+      }),
+    ]) as Array<[string, WaitingBucketItem[]]>;
   }, [items]);
 
   return (
@@ -84,7 +86,7 @@ export default function WaitingBucketsPanel({ onOpenCase }: Props) {
               <div className="section-header">
                 <div>
                   <div className="panel-title" style={{ marginBottom: 6 }}>
-                    {formatStep(step)}
+                    {formatWaitingStep(step)}
                   </div>
                   <div className="muted small">Кейсов в ожидании: {stepItems.length}</div>
                 </div>
@@ -99,21 +101,23 @@ export default function WaitingBucketsPanel({ onOpenCase }: Props) {
                   >
                     <div className="related-case-top">
                       <strong>Дело #{item.case_id}</strong>
-                      <span className="status-badge status-not-ready">Waiting</span>
+                      <span className="status-badge status-not-ready">
+                        {waitingBadgeLabel(item)}
+                      </span>
                     </div>
 
                     <div className="muted">{item.debtor_name || "—"}</div>
 
                     <div className="muted small">
-                      Сумма: {item.principal_amount || "—"} ₽
+                      Сумма: {formatMoney(item.principal_amount)} ₽
                     </div>
 
                     <div className="muted small">
-                      Eligible at: {formatDateTime(item.eligible_at)}
+                      Eligible at: {formatEligibleAt(item.eligible_at)}
                     </div>
 
                     <div className="muted small" style={{ marginTop: 6 }}>
-                      {item.reason || "Ожидает наступления условий выполнения"}
+                      {buildWaitingHint(item)}
                     </div>
                   </button>
                 ))}

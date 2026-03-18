@@ -27,11 +27,14 @@ function actionLabel(code: string) {
 function bucketLabel(bucket?: string) {
   const map: Record<string, string> = {
     eligible_now: "Готово к запуску",
+    queued: "Поставлено в очередь",
     waiting: "Ожидают",
     blocked: "Заблокированы",
     not_applicable: "Не применимо",
     already_processed: "Уже обработаны",
     success: "Успешно",
+    completed: "Завершено",
+    failed: "Ошибка",
     error: "Ошибка",
   };
   return map[bucket || ""] || bucket || "—";
@@ -40,15 +43,37 @@ function bucketLabel(bucket?: string) {
 function statusBadgeClass(value?: string) {
   const map: Record<string, string> = {
     eligible_now: "status-ready",
+    queued: "status-pretrial",
     success: "status-ready",
-    waiting: "status-draft",
+    completed: "status-ready",
+    waiting: "status-waiting",
     blocked: "status-not-ready",
     not_applicable: "status-not-ready",
     already_processed: "status-pretrial",
+    failed: "status-overdue",
     error: "status-overdue",
   };
 
   return map[value || ""] || "status-draft";
+}
+
+function formatDateTime(value?: string | null) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleString("ru-RU");
+}
+
+function getPreviewCount(preview: BatchPreviewResponse | null, key: string): number {
+  if (!preview?.preview) return 0;
+  return Number((preview.preview as any)?.[key]?.count || 0);
+}
+
+function getRunSummaryCount(runResult: BatchRunResponse | null, key: string): number {
+  if (!runResult?.summary) return 0;
+  return Number(runResult.summary[key] || 0);
 }
 
 export default function BatchExecutionPanel({
@@ -63,6 +88,15 @@ export default function BatchExecutionPanel({
 
   const count = selectedCaseIds.length;
   const canRun = useMemo(() => count > 0, [count]);
+
+  const eligibleNowCount = getPreviewCount(preview, "eligible_now");
+  const waitingCount = getPreviewCount(preview, "waiting");
+  const blockedCount = getPreviewCount(preview, "blocked");
+  const notApplicableCount = getPreviewCount(preview, "not_applicable");
+  const alreadyProcessedCount = getPreviewCount(preview, "already_processed");
+
+  const previewBuilt = Boolean(preview?.preview);
+  const hasEligibleNow = eligibleNowCount > 0;
 
   async function handlePreview() {
     if (!canRun) return;
@@ -137,7 +171,11 @@ export default function BatchExecutionPanel({
               <select
                 className="small-input"
                 value={actionCode}
-                onChange={(e) => setActionCode(e.target.value)}
+                onChange={(e) => {
+                  setActionCode(e.target.value);
+                  setPreview(null);
+                  setRunResult(null);
+                }}
               >
                 <option value="send_payment_due_notice">
                   {actionLabel("send_payment_due_notice")}
@@ -189,40 +227,67 @@ export default function BatchExecutionPanel({
             </div>
           )}
 
-          {preview?.preview && (
-            <div className="ops-grid batch-metrics-grid" style={{ marginTop: 16 }}>
-              <div className="ops-card ops-card-accent">
-                <div className="ops-card-title">Готово к запуску</div>
-                <div className="ops-card-value">{preview.preview.eligible_now?.count || 0}</div>
-              </div>
+          {previewBuilt && (
+            <>
+              <div className="ops-grid batch-metrics-grid" style={{ marginTop: 16 }}>
+                <div className="ops-card ops-card-accent">
+                  <div className="ops-card-title">Готово к запуску</div>
+                  <div className="ops-card-value">{eligibleNowCount}</div>
+                </div>
 
-              <div className="ops-card">
-                <div className="ops-card-title">Ожидают</div>
-                <div className="ops-card-value">{preview.preview.waiting?.count || 0}</div>
-              </div>
+                <div className="ops-card">
+                  <div className="ops-card-title">Ожидают</div>
+                  <div className="ops-card-value">{waitingCount}</div>
+                </div>
 
-              <div className="ops-card">
-                <div className="ops-card-title">Заблокированы</div>
-                <div className="ops-card-value">{preview.preview.blocked?.count || 0}</div>
-              </div>
+                <div className="ops-card">
+                  <div className="ops-card-title">Заблокированы</div>
+                  <div className="ops-card-value">{blockedCount}</div>
+                </div>
 
-              <div className="ops-card">
-                <div className="ops-card-title">Не применимо</div>
-                <div className="ops-card-value">{preview.preview.not_applicable?.count || 0}</div>
-              </div>
+                <div className="ops-card">
+                  <div className="ops-card-title">Не применимо</div>
+                  <div className="ops-card-value">{notApplicableCount}</div>
+                </div>
 
-              <div className="ops-card">
-                <div className="ops-card-title">Уже обработаны</div>
-                <div className="ops-card-value">
-                  {preview.preview.already_processed?.count || 0}
+                <div className="ops-card">
+                  <div className="ops-card-title">Уже обработаны</div>
+                  <div className="ops-card-value">{alreadyProcessedCount}</div>
+                </div>
+
+                <div className="ops-card">
+                  <div className="ops-card-title">Всего в пакете</div>
+                  <div className="ops-card-value">{preview?.total_selected || 0}</div>
                 </div>
               </div>
 
-              <div className="ops-card">
-                <div className="ops-card-title">Всего в пакете</div>
-                <div className="ops-card-value">{preview.total_selected || 0}</div>
+              <div className="participants-list" style={{ marginTop: 16 }}>
+                <div className="participant-card">
+                  <div className="participant-card-top">
+                    <div>
+                      <div className="participant-role">Операционный вывод</div>
+                      <div className="participant-name">Что делать с этим пакетом</div>
+                    </div>
+                  </div>
+
+                  <div className="participant-meta-grid">
+                    <div className="info-item info-item-wide">
+                      <span className="label">Рекомендация</span>
+                      <strong>
+                        {hasEligibleNow
+                          ? "Пакет можно запускать. Сначала проверь состав waiting/blocked, затем выполняй."
+                          : "В пакете нет дел, готовых к немедленному запуску. Сначала разберись с waiting и blocked."}
+                      </strong>
+                    </div>
+
+                    <div className="info-item">
+                      <span className="label">Action</span>
+                      <strong>{actionLabel(actionCode)}</strong>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+            </>
           )}
 
           {preview?.items?.length ? (
@@ -247,7 +312,7 @@ export default function BatchExecutionPanel({
                     </div>
                     <div className="info-item">
                       <span className="label">Можно выполнить с</span>
-                      <strong>{item.eligible_at || "—"}</strong>
+                      <strong>{formatDateTime(item.eligible_at)}</strong>
                     </div>
                   </div>
                 </div>
@@ -288,13 +353,22 @@ export default function BatchExecutionPanel({
                     </div>
                     <div className="info-item">
                       <span className="label">Можно выполнить с</span>
-                      <strong>{item.eligible_at || "—"}</strong>
+                      <strong>{formatDateTime(item.eligible_at)}</strong>
                     </div>
                   </div>
                 </div>
               ))}
             </div>
           ) : null}
+
+          {runResult && (
+            <div className="empty-box" style={{ marginTop: 16 }}>
+              Пакет выполнен. Успешно: {getRunSummaryCount(runResult, "success")} · waiting:{" "}
+              {getRunSummaryCount(runResult, "waiting")} · blocked:{" "}
+              {getRunSummaryCount(runResult, "blocked")} · errors:{" "}
+              {getRunSummaryCount(runResult, "error") || getRunSummaryCount(runResult, "failed")}
+            </div>
+          )}
         </div>
 
         <aside className="batch-shell-side">
@@ -316,6 +390,13 @@ export default function BatchExecutionPanel({
             <div className="batch-side-title">Waiting cases</div>
             <div className="muted small">
               Waiting — это не ошибка. Это будущая пропускная способность портфеля.
+            </div>
+          </div>
+
+          <div className="batch-side-card">
+            <div className="batch-side-title">Blocked cases</div>
+            <div className="muted small">
+              Blocked — это не повод запускать force по умолчанию. Сначала устраняй blocker’ы.
             </div>
           </div>
         </aside>

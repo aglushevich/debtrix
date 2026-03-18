@@ -29,6 +29,8 @@ from backend.app.models import (
     Tenant,
     TimelineEvent,
     User,
+    WorkspaceInvite,
+    WorkspaceMembership,
 )
 
 
@@ -54,6 +56,8 @@ TENANT_BOUND_MODELS: list[type[Any]] = [
     CasePlaybook,
     DocumentTemplate,
     GeneratedDocument,
+    WorkspaceMembership,
+    WorkspaceInvite,
 ]
 
 

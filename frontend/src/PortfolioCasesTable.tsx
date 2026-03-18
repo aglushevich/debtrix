@@ -1,7 +1,11 @@
-import { formatCaseStatus, formatDebtorType } from "./legalLabels";
+import {
+  formatCaseStatus,
+  formatSmartLevel,
+} from "./legalLabels";
+import { PortfolioCaseRow } from "./portfolioSmart";
 
 type Props = {
-  cases: any[];
+  cases: PortfolioCaseRow[];
   selectedCase: number | null;
   selectedCaseIds: number[];
   onOpenCase: (caseId: number) => void;
@@ -18,6 +22,17 @@ function formatMoney(value: any): string {
   });
 }
 
+function smartLevelBadgeClass(level?: string): string {
+  const map: Record<string, string> = {
+    ready: "status-ready",
+    partial: "status-draft",
+    waiting: "status-waiting",
+    blocked: "status-overdue",
+  };
+
+  return map[level || ""] || "status-draft";
+}
+
 export default function PortfolioCasesTable({
   cases,
   selectedCase,
@@ -26,10 +41,10 @@ export default function PortfolioCasesTable({
   onToggleCaseSelection,
   onToggleSelectAllVisible,
 }: Props) {
-  const visibleIds = cases.map((item: any) => item.id);
+  const visibleIds = cases.map((item) => item.id);
   const allVisibleSelected =
     visibleIds.length > 0 &&
-    visibleIds.every((id: number) => selectedCaseIds.includes(id));
+    visibleIds.every((id) => selectedCaseIds.includes(id));
 
   return (
     <section className="panel">
@@ -64,79 +79,83 @@ export default function PortfolioCasesTable({
                 <th style={{ width: 96 }}>Дело</th>
                 <th>Должник</th>
                 <th style={{ width: 150 }}>Тип договора</th>
-                <th style={{ width: 150 }}>Тип должника</th>
                 <th style={{ width: 150 }}>Сумма</th>
                 <th style={{ width: 130 }}>Срок оплаты</th>
                 <th style={{ width: 150 }}>Статус</th>
+                <th style={{ width: 120 }}>Readiness</th>
+                <th style={{ width: 140 }}>Smart</th>
+                <th style={{ width: 110 }}>Warnings</th>
+                <th style={{ width: 120 }}>Duplicates</th>
                 <th style={{ width: 120 }}>Действие</th>
               </tr>
             </thead>
 
             <tbody>
-              {cases.map((item: any) => {
+              {cases.map((item) => {
                 const checked = selectedCaseIds.includes(item.id);
                 const isCurrent = selectedCase === item.id;
 
                 return (
-                  <tr key={item.id} className={isCurrent ? "is-current" : ""}>
+                  <tr key={item.id} className={isCurrent ? "active-row" : ""}>
                     <td>
-                      <label className="registry-check">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => onToggleCaseSelection(item.id)}
-                        />
-                        <span className="registry-check-mark" />
-                      </label>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => onToggleCaseSelection(item.id)}
+                      />
                     </td>
 
-                    <td>
-                      <div className="portfolio-table-case-id">#{item.id}</div>
-                    </td>
+                    <td>{item.id}</td>
 
                     <td>
-                      <div className="registry-debtor-cell">
-                        <div className="portfolio-table-main">
-                          <strong>{item.debtor_name || "—"}</strong>
-
-                          {isCurrent && (
-                            <span className="status-badge status-ready">Открыто</span>
-                          )}
-
-                          {item?.is_archived && (
-                            <span className="status-badge status-draft">Архив</span>
-                          )}
-                        </div>
-
-                        <div className="registry-debtor-meta">
-                          {item.inn ? `ИНН ${item.inn}` : "ИНН не указан"}
-                        </div>
+                      <div style={{ fontWeight: 600 }}>
+                        {item.debtor_name || "—"}
                       </div>
+
+                      {item.smart.hint && (
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          {item.smart.hint}
+                        </div>
+                      )}
                     </td>
 
-                    <td>{item.contract_type_title || item.contract_type || "—"}</td>
+                    <td>{item.contract_type || "—"}</td>
 
-                    <td>
-                      {item.debtor_type_title || formatDebtorType(item.debtor_type)}
-                    </td>
-
-                    <td>
-                      <div className="registry-money-cell">
-                        {formatMoney(item.principal_amount)} ₽
-                      </div>
-                    </td>
+                    <td>{formatMoney(item.principal_amount)} ₽</td>
 
                     <td>{item.due_date || "—"}</td>
 
+                    <td>{formatCaseStatus(item.status)}</td>
+
                     <td>
-                      <span className={`status-badge status-${item.status || "draft"}`}>
-                        {formatCaseStatus(item.status)}
+                      <strong>{item.smart.readinessScore}</strong>
+                    </td>
+
+                    <td>
+                      <span
+                        className={`status-badge ${smartLevelBadgeClass(
+                          item.smart.smartLevel
+                        )}`}
+                      >
+                        {formatSmartLevel(item.smart.smartLevel)}
                       </span>
                     </td>
 
                     <td>
+                      {item.smart.warningsCount > 0
+                        ? `${item.smart.warningsCount} ⚠`
+                        : "—"}
+                    </td>
+
+                    <td>
+                      {item.smart.duplicatesCount > 0
+                        ? `${item.smart.duplicatesCount} 🔁`
+                        : "—"}
+                    </td>
+
+                    <td>
                       <button
-                        className="secondary-btn portfolio-table-open-btn"
+                        className="secondary-btn"
                         onClick={() => onOpenCase(item.id)}
                       >
                         Открыть

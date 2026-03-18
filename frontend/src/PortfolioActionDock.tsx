@@ -4,6 +4,27 @@ type Props = {
 
 export default function PortfolioActionDock({ selectedCaseIds }: Props) {
   const hasSelection = selectedCaseIds.length > 0;
+  const selectionSize = selectedCaseIds.length;
+
+  function selectionHint() {
+    if (!hasSelection) {
+      return "Сначала отметь кейсы в registry, затем переходи в batch execution.";
+    }
+
+    if (selectionSize === 1) {
+      return "Выбран 1 кейс. Batch допустим, но чаще полезнее сначала проверить preview.";
+    }
+
+    if (selectionSize <= 10) {
+      return "Небольшой пакет. Хорошо подходит для осторожного первого запуска.";
+    }
+
+    if (selectionSize <= 50) {
+      return "Средний пакет. Обязательно смотри preview перед запуском.";
+    }
+
+    return "Крупный пакет. Проверь homogeneous set, waiting и blocked перед запуском.";
+  }
 
   return (
     <section className="panel portfolio-action-dock">
@@ -12,17 +33,13 @@ export default function PortfolioActionDock({ selectedCaseIds }: Props) {
 
       <div className="dock-stat">
         <span>Выбрано в пакет</span>
-        <strong>{selectedCaseIds.length}</strong>
+        <strong>{selectionSize}</strong>
       </div>
 
       <div className="ops-hints-list">
         <div className="ops-hint-card">
           <strong>Текущее состояние</strong>
-          <div className="muted small">
-            {hasSelection
-              ? "Пакет сформирован. Дальше проверь homogeneous set перед запуском."
-              : "Сначала отметь кейсы в registry, затем переходи в batch execution."}
-          </div>
+          <div className="muted small">{selectionHint()}</div>
         </div>
 
         <div className="ops-hint-card">

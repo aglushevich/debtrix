@@ -28,6 +28,8 @@ from backend.app.models.tenant import Tenant
 from backend.app.models.timeline_event import TimelineEvent
 from backend.app.models.user import User
 from backend.app.models.worker_lease import WorkerLease
+from backend.app.models.workspace_invite import WorkspaceInvite
+from backend.app.models.workspace_membership import WorkspaceMembership
 
 __all__ = [
     "AutomationRule",
@@ -60,4 +62,6 @@ __all__ = [
     "TimelineEvent",
     "User",
     "WorkerLease",
+    "WorkspaceInvite",
+    "WorkspaceMembership",
 ]

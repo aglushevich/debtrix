@@ -42,6 +42,9 @@ def serialize_waiting_bucket(row: CaseWaitingBucket) -> dict[str, Any]:
         except Exception:
             payload = {}
 
+    reason_text = row.reason_text
+    reason_code = row.reason_code
+
     return {
         "id": row.id,
         "tenant_id": row.tenant_id,
@@ -50,8 +53,9 @@ def serialize_waiting_bucket(row: CaseWaitingBucket) -> dict[str, Any]:
         "step_code": row.step_code,
         "bucket_code": row.bucket_code,
         "status": row.status,
-        "reason_code": row.reason_code,
-        "reason_text": row.reason_text,
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "reason": reason_text,  # alias для frontend
         "eligible_at": row.eligible_at.isoformat() if row.eligible_at else None,
         "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
         "payload": payload,

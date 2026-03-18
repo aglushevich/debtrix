@@ -1,11 +1,46 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from backend.app.models import Case
 from backend.app.services.playbook_engine_service import evaluate_case_playbook
+
+
+def _serialize_waiting_bucket(bucket: Any) -> dict[str, Any] | None:
+    if not bucket:
+        return None
+
+    eligible_at = bucket.get("eligible_at")
+    if isinstance(eligible_at, datetime):
+        eligible_at = eligible_at.isoformat()
+
+    reason_text = bucket.get("reason_text") or bucket.get("reason")
+    reason_code = bucket.get("reason_code")
+
+    return {
+        "step_code": bucket.get("step_code"),
+        "bucket_code": bucket.get("bucket_code"),
+        "status": bucket.get("status"),
+        "reason_code": reason_code,
+        "reason_text": reason_text,
+        "reason": reason_text,
+        "eligible_at": eligible_at,
+    }
+
+
+def _blocked_hint(blocked_steps: list[Any]) -> str | None:
+    if not blocked_steps:
+        return None
+
+    first = blocked_steps[0]
+
+    if isinstance(first, dict):
+        return first.get("title") or first.get("step_code") or "Есть blocker"
+
+    return str(first)
 
 
 def serialize_portfolio_case_row(case: Case, playbook_eval: dict[str, Any]) -> dict[str, Any]:
@@ -23,7 +58,17 @@ def serialize_portfolio_case_row(case: Case, playbook_eval: dict[str, Any]) -> d
     else:
         routing_status = "idle"
 
-    first_waiting = waiting_buckets[0] if waiting_buckets else None
+    first_waiting = _serialize_waiting_bucket(waiting_buckets[0]) if waiting_buckets else None
+    blocked_hint = _blocked_hint(blocked_steps)
+
+    if routing_status == "waiting" and first_waiting:
+        routing_hint = first_waiting.get("reason") or "Ожидает окна выполнения"
+    elif routing_status == "blocked":
+        routing_hint = blocked_hint or "Нужно устранить blocker"
+    elif routing_status == "ready":
+        routing_hint = "Можно выполнять следующий шаг"
+    else:
+        routing_hint = "Требуется разбор маршрута"
 
     return {
         "case_id": case.id,
@@ -34,9 +79,13 @@ def serialize_portfolio_case_row(case: Case, playbook_eval: dict[str, Any]) -> d
         "is_archived": bool(getattr(case, "is_archived", False)),
         "playbook_code": (playbook_eval.get("playbook") or {}).get("code"),
         "routing_status": routing_status,
+        "routing_hint": routing_hint,
         "current_step": current_step,
         "next_actions": next_actions,
         "waiting_bucket": first_waiting,
+        "waiting_reason": first_waiting.get("reason") if first_waiting else None,
+        "waiting_reason_code": first_waiting.get("reason_code") if first_waiting else None,
+        "waiting_eligible_at": first_waiting.get("eligible_at") if first_waiting else None,
         "blocked_steps": blocked_steps,
     }
 

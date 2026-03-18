@@ -72,6 +72,29 @@ type Props = {
   onDownloadDocument: (caseId: number, code: string, format: "pdf" | "docx") => void;
 };
 
+function getSmartBlock(dashboard: any) {
+  return (
+    dashboard?.case?.meta?.smart ||
+    dashboard?.case?.smart ||
+    dashboard?.smart ||
+    null
+  );
+}
+
+function readinessLabel(level?: string) {
+  if (level === "ready") return "Готово";
+  if (level === "partial") return "Частично готово";
+  if (level === "waiting") return "Ожидает";
+  return "Черновик";
+}
+
+function readinessClass(level?: string) {
+  if (level === "ready") return "is-ready";
+  if (level === "partial") return "is-partial";
+  if (level === "waiting") return "is-waiting";
+  return "is-draft";
+}
+
 export default function CaseWorkspace({
   selectedCase,
   selectedCaseCard,
@@ -104,6 +127,15 @@ export default function CaseWorkspace({
   onOpenCase,
   onDownloadDocument,
 }: Props) {
+  const smart = getSmartBlock(dashboard);
+  const smartScore = Number(smart?.readiness_score || 0);
+  const smartLevel = String(smart?.readiness_level || "draft");
+  const smartWarnings = Array.isArray(smart?.warnings) ? smart.warnings : [];
+  const smartSignals = Array.isArray(smart?.signals) ? smart.signals : [];
+  const smartDuplicates = Array.isArray(smart?.duplicates) ? smart.duplicates : [];
+  const smartOrganization = smart?.organization || null;
+  const smartCompleteness = smart?.completeness || null;
+
   if (loadingCase) {
     return (
       <div className="case-workspace">
@@ -134,6 +166,140 @@ export default function CaseWorkspace({
           selectedCaseCard={selectedCaseCard}
           dashboard={dashboard}
         />
+
+        {!!smart && (
+          <section className="case-section-block">
+            <div className="case-section-head">
+              <div>
+                <div className="section-eyebrow">Smart layer</div>
+                <div className="panel-title" style={{ marginBottom: 6 }}>
+                  Smart readiness по делу
+                </div>
+                <div className="muted">
+                  Быстрая оценка качества карточки, сигналов риска и полноты данных.
+                </div>
+              </div>
+            </div>
+
+            <section className="panel smart-case-panel">
+              <div className="smart-case-hero">
+                <div className="smart-case-hero-main">
+                  <div className="smart-case-hero-label">Readiness score</div>
+                  <div className="smart-case-hero-value">{smartScore}</div>
+                  <div className={`smart-case-hero-badge ${readinessClass(smartLevel)}`}>
+                    {readinessLabel(smartLevel)}
+                  </div>
+                  <div className="smart-case-hero-progress">
+                    <div
+                      className={`smart-case-hero-progress-bar ${readinessClass(smartLevel)}`}
+                      style={{ width: `${Math.max(6, Math.min(smartScore, 100))}%` }}
+                    />
+                  </div>
+                  <div className="smart-case-hero-caption">
+                    {smartLevel === "ready" &&
+                      "Карточка заполнена достаточно хорошо для уверенной дальнейшей работы."}
+                    {smartLevel === "partial" &&
+                      "Карточка рабочая, но есть пробелы, которые желательно закрыть."}
+                    {smartLevel === "waiting" &&
+                      "Дело пока не готово к активному движению и требует уточнений."}
+                    {smartLevel === "draft" &&
+                      "Это всё ещё черновик: нужны дополнительные данные для нормальной маршрутизации."}
+                  </div>
+                </div>
+
+                <div className="smart-case-side-grid">
+                  <div className="smart-case-mini-card">
+                    <span>Warnings</span>
+                    <strong>{smartWarnings.length}</strong>
+                  </div>
+
+                  <div className="smart-case-mini-card">
+                    <span>Signals</span>
+                    <strong>{smartSignals.length}</strong>
+                  </div>
+
+                  <div className="smart-case-mini-card">
+                    <span>Duplicates</span>
+                    <strong>{smartDuplicates.length}</strong>
+                  </div>
+
+                  <div className="smart-case-mini-card">
+                    <span>Организация</span>
+                    <strong>{smartOrganization?.resolved ? "Найдена" : "Нет"}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {!!smartCompleteness && (
+                <div className="smart-case-completeness-grid">
+                  <div className="smart-case-check-card">
+                    <span>ИНН</span>
+                    <strong>{smartCompleteness.has_inn ? "Есть" : "Нет"}</strong>
+                  </div>
+                  <div className="smart-case-check-card">
+                    <span>ОГРН</span>
+                    <strong>{smartCompleteness.has_ogrn ? "Есть" : "Нет"}</strong>
+                  </div>
+                  <div className="smart-case-check-card">
+                    <span>Срок оплаты</span>
+                    <strong>{smartCompleteness.has_due_date ? "Есть" : "Нет"}</strong>
+                  </div>
+                  <div className="smart-case-check-card">
+                    <span>Сумма</span>
+                    <strong>{smartCompleteness.has_amount ? "Есть" : "Нет"}</strong>
+                  </div>
+                </div>
+              )}
+
+              {!!smartSignals.length && (
+                <div className="smart-case-block">
+                  <div className="smart-case-block-title">Сигналы</div>
+                  <div className="smart-case-chip-list">
+                    {smartSignals.map((item: string, index: number) => (
+                      <span key={`${item}:${index}`} className="smart-case-chip">
+                        {item}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {!!smartWarnings.length && (
+                <div className="smart-case-block smart-case-block-warning">
+                  <div className="smart-case-block-title">Предупреждения</div>
+                  <ul className="smart-case-list">
+                    {smartWarnings.map((item: string, index: number) => (
+                      <li key={`${item}:${index}`}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {!!smartDuplicates.length && (
+                <div className="smart-case-block smart-case-block-duplicate">
+                  <div className="smart-case-block-title">Возможные дубликаты</div>
+                  <div className="smart-case-duplicate-list">
+                    {smartDuplicates.map((item: any, index: number) => (
+                      <button
+                        type="button"
+                        key={`${item.case_id || index}-${item.inn || ""}-${item.ogrn || ""}`}
+                        className="smart-case-duplicate-card"
+                        onClick={() => item.case_id && onOpenCase(item.case_id)}
+                      >
+                        <strong>{item.name || "Без названия"}</strong>
+                        <div className="muted small">
+                          Дело #{item.case_id || "—"}
+                          {item.inn ? ` · ИНН ${item.inn}` : ""}
+                          {item.ogrn ? ` · ОГРН ${item.ogrn}` : ""}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+          </section>
+        )}
 
         <section className="case-section-block">
           <div className="case-section-head">

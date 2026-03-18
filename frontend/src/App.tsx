@@ -10,6 +10,7 @@ import {
   getDashboard,
   getDebtorProfile,
   getPortfolioCases,
+  getPortfolioRouting,
   getSavedViews,
   getTimeline,
   identifyDebtor,
@@ -37,6 +38,14 @@ import RoutingOverviewPanel from "./RoutingOverviewPanel";
 import WaitingBucketsPanel from "./WaitingBucketsPanel";
 import ExecutionSummaryPanel from "./ExecutionSummaryPanel";
 import CaseWorkspace from "./CaseWorkspace";
+import WorkspaceSwitcher from "./WorkspaceSwitcher";
+import { buildPortfolioCaseRows } from "./portfolioSmart";
+import {
+  DEFAULT_PORTFOLIO_SORTING,
+  PortfolioSorting,
+  sortPortfolioCaseRows,
+} from "./portfolioSorting";
+import { applySmartPortfolioFilters } from "./portfolioFilters";
 
 type ViewMode = "portfolio" | "case";
 
@@ -84,6 +93,44 @@ function parseAmount(value: any): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normalizeSorting(input: any): PortfolioSorting {
+  const key = String(input?.key || DEFAULT_PORTFOLIO_SORTING.key);
+  const direction = String(input?.direction || DEFAULT_PORTFOLIO_SORTING.direction);
+
+  const allowedKeys = new Set([
+    "readiness",
+    "smart_level",
+    "warnings",
+    "duplicates",
+    "amount",
+    "due_date",
+    "status",
+    "id",
+  ]);
+
+  const allowedDirections = new Set(["asc", "desc"]);
+
+  return {
+    key: allowedKeys.has(key) ? (key as PortfolioSorting["key"]) : DEFAULT_PORTFOLIO_SORTING.key,
+    direction: allowedDirections.has(direction)
+      ? (direction as PortfolioSorting["direction"])
+      : DEFAULT_PORTFOLIO_SORTING.direction,
+  };
+}
+
+function normalizeFilters(input: any): PortfolioFilters {
+  return {
+    q: input?.q || "",
+    status: input?.status || undefined,
+    contract_type: input?.contract_type || undefined,
+    debtor_type: input?.debtor_type || undefined,
+    include_archived: Boolean(input?.include_archived),
+    smart_level: (input?.smart_level || "") as PortfolioFilters["smart_level"],
+    warnings_only: Boolean(input?.warnings_only),
+    duplicates_only: Boolean(input?.duplicates_only),
+  };
+}
+
 const DEFAULT_SOFT_POLICY: SoftPolicy = {
   payment_due_notice_delay_days: 0,
   debt_notice_delay_days: 3,
@@ -103,16 +150,23 @@ export default function App() {
   const [dashboard, setDashboard] = useState<any>(null);
   const [timeline, setTimeline] = useState<any>(null);
   const [controlRoomDashboard, setControlRoomDashboard] = useState<any>(null);
+  const [portfolioRouting, setPortfolioRouting] = useState<any>(null);
   const [debtorProfile, setDebtorProfile] = useState<any>(null);
   const [organizationPreview, setOrganizationPreview] = useState<any>(null);
   const [participants, setParticipants] = useState<any[]>([]);
   const [savedViews, setSavedViews] = useState<SavedViewItem[]>([]);
   const [activeViewId, setActiveViewId] = useState<number | null>(null);
+  const [executionRefreshKey, setExecutionRefreshKey] = useState(0);
 
   const [filters, setFilters] = useState<PortfolioFilters>({
     q: "",
     include_archived: false,
+    smart_level: "",
+    warnings_only: false,
+    duplicates_only: false,
   });
+
+  const [sorting, setSorting] = useState<PortfolioSorting>(DEFAULT_PORTFOLIO_SORTING);
 
   const [loadingCases, setLoadingCases] = useState(false);
   const [loadingCase, setLoadingCase] = useState(false);
@@ -133,17 +187,19 @@ export default function App() {
       setLoadingCases(true);
       setError("");
 
-      const [all, filtered, views, controlRoom] = await Promise.all([
+      const [all, filtered, views, controlRoom, routing] = await Promise.all([
         getCases(Boolean(filters.include_archived)),
         getPortfolioCases(filters),
         getSavedViews().catch(() => ({ items: [] })),
         getControlRoomDashboard().catch(() => null),
+        getPortfolioRouting().catch(() => null),
       ]);
 
       setAllCases(all || []);
       setPortfolioCases(filtered || []);
       setSavedViews(views.items || []);
       setControlRoomDashboard(controlRoom || null);
+      setPortfolioRouting(routing || null);
 
       const currentSelectedExists =
         selectedCase && (filtered || []).some((item: any) => item.id === selectedCase);
@@ -336,8 +392,18 @@ export default function App() {
       description: "Сохранённый вид портфеля взыскания",
       entity_type: "case",
       filters,
-      sorting: null,
-      columns: ["id", "debtor_name", "contract_type", "status", "principal_amount"],
+      sorting,
+      columns: [
+        "id",
+        "debtor_name",
+        "contract_type",
+        "status",
+        "principal_amount",
+        "readiness_score",
+        "smart_level",
+        "warnings_count",
+        "duplicates_count",
+      ],
       is_default: false,
       is_shared: false,
     });
@@ -349,9 +415,9 @@ export default function App() {
   async function handleApplyView(item: SavedViewItem) {
     const result = await applySavedView(item.id);
     setActiveViewId(item.id);
-    setFilters({
-      ...(result.filters || item.filters || {}),
-    });
+
+    setFilters(normalizeFilters(result.filters || item.filters || {}));
+    setSorting(normalizeSorting(result.view?.sorting || item.sorting || DEFAULT_PORTFOLIO_SORTING));
     setSelectedCaseIds([]);
     setViewMode("portfolio");
   }
@@ -362,8 +428,23 @@ export default function App() {
     );
   }
 
+  const portfolioCaseRows = useMemo(
+    () => buildPortfolioCaseRows(portfolioCases, portfolioRouting),
+    [portfolioCases, portfolioRouting]
+  );
+
+  const filteredPortfolioCaseRows = useMemo(
+    () => applySmartPortfolioFilters(portfolioCaseRows, filters),
+    [portfolioCaseRows, filters]
+  );
+
+  const sortedPortfolioCaseRows = useMemo(
+    () => sortPortfolioCaseRows(filteredPortfolioCaseRows, sorting),
+    [filteredPortfolioCaseRows, sorting]
+  );
+
   function toggleSelectAllVisible() {
-    const visibleIds = portfolioCases.map((item: any) => item.id);
+    const visibleIds = sortedPortfolioCaseRows.map((item) => item.id);
     const allSelected =
       visibleIds.length > 0 &&
       visibleIds.every((id: number) => selectedCaseIds.includes(id));
@@ -396,7 +477,7 @@ export default function App() {
   );
 
   const portfolioStats = useMemo(() => {
-    const items = portfolioCases || [];
+    const items = filteredPortfolioCaseRows || [];
     const totalAmount = items.reduce(
       (acc: number, item: any) => acc + parseAmount(item?.principal_amount),
       0
@@ -414,7 +495,7 @@ export default function App() {
       closed: items.filter((item: any) => item?.status === "closed").length,
       totalAmount,
     };
-  }, [portfolioCases]);
+  }, [filteredPortfolioCaseRows]);
 
   return (
     <div className="layout">
@@ -438,12 +519,15 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <WorkspaceSwitcher />
+
             {viewMode === "case" && (
               <button className="secondary-btn" onClick={returnToPortfolio}>
                 Вернуться к портфелю
               </button>
             )}
+
             {viewMode === "portfolio" && selectedCase && (
               <button className="secondary-btn" onClick={() => openCase(selectedCase)}>
                 Открыть выбранное дело
@@ -500,7 +584,7 @@ export default function App() {
             {(portfolioSection === "overview" || portfolioSection === "filters") && (
               <IntelligencePortfolioPanel
                 dashboard={controlRoomDashboard}
-                cases={portfolioCases}
+                cases={sortedPortfolioCaseRows}
                 selectedCase={selectedCase}
                 onOpenCase={openCase}
               />
@@ -524,7 +608,7 @@ export default function App() {
 
             {(portfolioSection === "overview" || portfolioSection === "filters") && (
               <PortfolioOperationsPanel
-                cases={portfolioCases}
+                cases={sortedPortfolioCaseRows}
                 selectedCaseIds={selectedCaseIds}
                 selectedCase={selectedCase}
                 onOpenCase={openCase}
@@ -535,7 +619,9 @@ export default function App() {
               <>
                 <PortfolioToolbar
                   filters={filters}
+                  sorting={sorting}
                   onChange={setFilters}
+                  onChangeSorting={setSorting}
                   onSaveView={handleSaveView}
                 />
 
@@ -562,7 +648,7 @@ export default function App() {
 
                 {(portfolioSection === "overview" || portfolioSection === "registry") && (
                   <PortfolioCasesTable
-                    cases={portfolioCases}
+                    cases={sortedPortfolioCaseRows}
                     selectedCase={selectedCase}
                     selectedCaseIds={selectedCaseIds}
                     onOpenCase={openCase}
@@ -580,12 +666,14 @@ export default function App() {
                       if (selectedCase != null) {
                         await loadCaseData(selectedCase);
                       }
+
+                      setExecutionRefreshKey((prev) => prev + 1);
                     }}
                   />
                 )}
 
                 {(portfolioSection === "overview" || portfolioSection === "execution") && (
-                  <ExecutionConsolePanel />
+                  <ExecutionConsolePanel refreshKey={executionRefreshKey} />
                 )}
               </div>
 

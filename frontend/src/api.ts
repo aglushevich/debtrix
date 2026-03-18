@@ -1,3 +1,5 @@
+import { getActiveWorkspace } from "./workspace";
+
 const DEFAULT_API_BASE =
   window.location.hostname === "localhost"
     ? "http://localhost:8000"
@@ -5,6 +7,15 @@ const DEFAULT_API_BASE =
 
 export const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined) || DEFAULT_API_BASE;
+
+function withWorkspace(url: string) {
+  const workspaceId = getActiveWorkspace();
+
+  if (!workspaceId) return url;
+
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}tenant_id=${workspaceId}`;
+}
 
 async function parseResponse<T = any>(res: Response): Promise<T> {
   const contentType = res.headers.get("content-type") || "";
@@ -385,6 +396,9 @@ export type PortfolioFilters = {
   contract_type?: string;
   debtor_type?: string;
   include_archived?: boolean;
+  smart_level?: "ready" | "partial" | "waiting" | "blocked" | "";
+  warnings_only?: boolean;
+  duplicates_only?: boolean;
 };
 
 export type SoftPolicy = {
@@ -583,12 +597,12 @@ export async function getCases(includeArchived = false) {
   if (includeArchived) params.set("include_archived", "true");
 
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const res = await fetch(`${API_BASE}/cases${suffix}`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases${suffix}`));
   return parseResponse(res);
 }
 
 export async function createCase(payload: any) {
-  const res = await fetch(`${API_BASE}/cases`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -606,19 +620,20 @@ export async function unarchiveCase(caseId: number) {
 }
 
 export async function getDashboard(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/dashboard`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/dashboard`));
   return safeParseOrFallback(res, emptyDashboard(caseId));
 }
 
 export async function getTimeline(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/timeline`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/timeline`));
   return safeParseOrFallback(res, { case_id: caseId, items: [] });
 }
 
 export async function applyAction(caseId: number, action: string) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/actions/${action}`, {
-    method: "POST",
-  });
+  const res = await fetch(
+    withWorkspace(`${API_BASE}/cases/${caseId}/actions/${action}`),
+    { method: "POST" }
+  );
 
   return parseResponse(res);
 }
@@ -628,7 +643,9 @@ export async function downloadDocument(
   code: string,
   format: "pdf" | "docx"
 ) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/documents/${code}.${format}`);
+  const res = await fetch(
+    withWorkspace(`${API_BASE}/cases/${caseId}/documents/${code}.${format}`)
+  );
 
   if (!res.ok) {
     const contentType = res.headers.get("content-type") || "";
@@ -701,17 +718,17 @@ export async function getDebtorIntelligence(caseId: number) {
 }
 
 export async function getAvailableDocuments(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/available-documents`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/available-documents`));
   return safeParseOrFallback(res, { case_id: caseId, documents: [] });
 }
 
 export async function getAvailableActions(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/available-actions`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/available-actions`));
   return safeParseOrFallback(res, { case_id: caseId, actions: [] });
 }
 
 export async function getDocumentReadiness(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/document-readiness`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/document-readiness`));
   return safeParseOrFallback(res, { case_id: caseId, documents: [] });
 }
 
@@ -719,7 +736,7 @@ export async function identifyDebtor(
   caseId: number,
   payload: { inn?: string; ogrn?: string }
 ) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/debtor/identify`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/debtor/identify`), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -732,7 +749,7 @@ export async function refreshDebtor(
   caseId: number,
   payload?: { inn?: string; ogrn?: string }
 ) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/debtor/refresh`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/debtor/refresh`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload || {}),
@@ -742,7 +759,7 @@ export async function refreshDebtor(
 }
 
 export async function getDebtorProfile(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/debtor/profile`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/debtor/profile`));
   return parseResponse(res);
 }
 
@@ -771,12 +788,12 @@ export async function lookupOrganization(payload: { inn?: string; ogrn?: string 
   if (payload.inn) params.set("inn", payload.inn);
   if (payload.ogrn) params.set("ogrn", payload.ogrn);
 
-  const res = await fetch(`${API_BASE}/organizations/lookup?${params.toString()}`);
+  const res = await fetch(withWorkspace(`${API_BASE}/organizations/lookup?${params.toString()}`));
   return parseResponse(res);
 }
 
 export async function getCaseParticipants(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/participants`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/participants`));
   return safeParseOrFallback(res, { case_id: caseId, participants: [] });
 }
 
@@ -847,7 +864,7 @@ export async function getOrganizationStarterKit(
 export async function getCaseIntegrations(
   caseId: number
 ): Promise<CaseIntegrationsResponse> {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/integrations`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/integrations`));
   return safeParseOrFallback(res, {
     case_id: caseId,
     integrations: [],
@@ -856,14 +873,14 @@ export async function getCaseIntegrations(
 }
 
 export async function syncFnsIntegration(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/integrations/fns/sync`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/integrations/fns/sync`), {
     method: "POST",
   });
   return parseResponse(res);
 }
 
 export async function checkFsspIntegration(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/integrations/fssp/check`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/integrations/fssp/check`), {
     method: "POST",
   });
   return parseResponse(res);
@@ -872,7 +889,7 @@ export async function checkFsspIntegration(caseId: number) {
 export async function getExternalActions(
   caseId: number
 ): Promise<ExternalActionsResponse> {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/external-actions`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/external-actions`));
   return safeParseOrFallback(res, { case_id: caseId, actions: [] });
 }
 
@@ -881,10 +898,8 @@ export async function prepareExternalAction(
   actionCode: string
 ) {
   const res = await fetch(
-    `${API_BASE}/cases/${caseId}/external-actions/${actionCode}/prepare`,
-    {
-      method: "POST",
-    }
+    withWorkspace(`${API_BASE}/cases/${caseId}/external-actions/${actionCode}/prepare`),
+    { method: "POST" }
   );
   return parseResponse(res);
 }
@@ -892,35 +907,32 @@ export async function prepareExternalAction(
 export async function startEsiaSession(
   actionId: number
 ): Promise<StartEsiaSessionResponse> {
-  const res = await fetch(
-    `${API_BASE}/external-actions/${actionId}/esia-session/start`,
-    { method: "POST" }
-  );
+  const res = await fetch(withWorkspace(`${API_BASE}/external-actions/${actionId}/esia-session/start`), {
+    method: "POST",
+  });
   return parseResponse<StartEsiaSessionResponse>(res);
 }
 
 export async function authorizeEsiaSession(
   sessionId: number
 ): Promise<AuthorizeEsiaSessionResponse> {
-  const res = await fetch(
-    `${API_BASE}/esia-sessions/${sessionId}/authorize`,
-    { method: "POST" }
-  );
+  const res = await fetch(withWorkspace(`${API_BASE}/esia-sessions/${sessionId}/authorize`), {
+    method: "POST",
+  });
   return parseResponse<AuthorizeEsiaSessionResponse>(res);
 }
 
 export async function dispatchExternalAction(
   actionId: number
 ): Promise<DispatchExternalActionResponse> {
-  const res = await fetch(
-    `${API_BASE}/external-actions/${actionId}/dispatch`,
-    { method: "POST" }
-  );
+  const res = await fetch(withWorkspace(`${API_BASE}/external-actions/${actionId}/dispatch`), {
+    method: "POST",
+  });
   return parseResponse<DispatchExternalActionResponse>(res);
 }
 
 export async function getSavedViews(): Promise<SavedViewsResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/views`);
+  const res = await fetch(withWorkspace(`${API_BASE}/portfolio/views`));
   const data = await safeParseOrFallback<any>(res, []);
   const items = Array.isArray(data)
     ? data.map(normalizeSavedView)
@@ -946,7 +958,7 @@ export async function createSavedView(
     },
   };
 
-  const res = await fetch(`${API_BASE}/portfolio/views`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/portfolio/views`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(backendPayload),
@@ -963,7 +975,7 @@ export async function createSavedView(
 export async function applySavedView(
   viewId: number
 ): Promise<{ ok?: boolean; view?: SavedViewItem; filters?: Record<string, any> }> {
-  const res = await fetch(`${API_BASE}/portfolio/views/${viewId}`);
+  const res = await fetch(withWorkspace(`${API_BASE}/portfolio/views/${viewId}`));
   const data = await parseResponse<any>(res);
   const rawView = data?.view || data;
 
@@ -975,7 +987,7 @@ export async function applySavedView(
 }
 
 export async function getSoftPolicy(caseId: number): Promise<SoftPolicyResponse> {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/soft-policy`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/soft-policy`));
   return safeParseOrFallback(res, {
     case_id: caseId,
     soft_policy: {
@@ -990,7 +1002,7 @@ export async function updateSoftPolicy(
   caseId: number,
   payload: SoftPolicy
 ): Promise<{ ok?: boolean; case_id?: number; soft_policy?: SoftPolicy }> {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/soft-policy`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/soft-policy`), {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1000,7 +1012,7 @@ export async function updateSoftPolicy(
 }
 
 export async function getPortfolioRouting(): Promise<PortfolioRoutingResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/routing`);
+  const res = await fetch(withWorkspace(`${API_BASE}/portfolio/routing`));
   return safeParseOrFallback(res, {
     summary: { total: 0, ready: 0, waiting: 0, blocked: 0, idle: 0 },
     buckets: { ready: [], waiting: [], blocked: [], idle: [] },
@@ -1008,12 +1020,12 @@ export async function getPortfolioRouting(): Promise<PortfolioRoutingResponse> {
 }
 
 export async function getControlRoomSummary(): Promise<ControlRoomSummary> {
-  const res = await fetch(`${API_BASE}/control-room/summary`);
+  const res = await fetch(withWorkspace(`${API_BASE}/control-room/summary`));
   return safeParseOrFallback(res, {});
 }
 
 export async function getControlRoomDashboard(): Promise<ControlRoomDashboardResponse> {
-  const res = await fetch(`${API_BASE}/control-room/dashboard`);
+  const res = await fetch(withWorkspace(`${API_BASE}/control-room/dashboard`));
   return safeParseOrFallback(res, {
     summary: {},
     routing: {
@@ -1037,7 +1049,7 @@ export async function getControlRoomDashboard(): Promise<ControlRoomDashboardRes
 }
 
 export async function getExecutionConsoleRuns(): Promise<ControlRoomExecutionConsoleResponse> {
-  const res = await fetch(`${API_BASE}/control-room/execution-console`);
+  const res = await fetch(withWorkspace(`${API_BASE}/control-room/execution-console`));
   return safeParseOrFallback(res, {
     batch_jobs: [],
     batch_metrics: {},
@@ -1046,7 +1058,7 @@ export async function getExecutionConsoleRuns(): Promise<ControlRoomExecutionCon
 }
 
 export async function getWaitingBuckets(): Promise<WaitingBucketsResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/waiting-buckets`);
+  const res = await fetch(withWorkspace(`${API_BASE}/portfolio/waiting-buckets`));
   return safeParseOrFallback(res, { items: [] });
 }
 
@@ -1054,7 +1066,7 @@ export async function previewBatchExecution(payload: {
   action_code: string;
   case_ids: number[];
 }): Promise<BatchPreviewResponse> {
-  const res = await fetch(`${API_BASE}/batch-actions/preview`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/batch-actions/preview`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -1068,7 +1080,7 @@ export async function runBatchExecution(payload: {
   case_ids: number[];
   force?: boolean;
 }): Promise<BatchRunResponse> {
-  const res = await fetch(`${API_BASE}/batch-actions/execute`, {
+  const res = await fetch(withWorkspace(`${API_BASE}/batch-actions/execute`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1120,10 +1132,362 @@ export async function getPortfolioCases(filters: PortfolioFilters = {}) {
 }
 
 export async function getExecutionHistory(caseId: number) {
-  const res = await fetch(`${API_BASE}/cases/${caseId}/execution-history`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/execution-history`));
 
   return safeParseOrFallback(res, {
     case_id: caseId,
     items: [],
   });
+}
+
+/* --------------------------
+   WORKSPACES
+--------------------------- */
+
+export async function getUserWorkspaces(userId: number) {
+  const res = await fetch(`${API_BASE}/users/${userId}/workspaces`);
+
+  if (!res.ok) {
+    throw new Error("Не удалось получить workspaces");
+  }
+
+  return res.json();
+}
+
+export async function getWorkspaceMembers(workspaceId: number) {
+  const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/members`);
+
+  if (!res.ok) {
+    throw new Error("Не удалось получить участников");
+  }
+
+  return res.json();
+}
+
+export async function getWorkspaceInvites(workspaceId: number) {
+  const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/invites`);
+
+  if (!res.ok) {
+    throw new Error("Не удалось получить приглашения");
+  }
+
+  return res.json();
+}
+
+export async function createWorkspaceInvite(
+  workspaceId: number,
+  payload: {
+    email: string;
+    role: string;
+  }
+) {
+  const res = await fetch(`${API_BASE}/workspaces/${workspaceId}/invites`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    throw new Error("Не удалось создать приглашение");
+  }
+
+  return res.json();
+}
+
+/* --------------------------
+   BLOCK 47/49 — COMMAND + SMART CASE CREATION
+--------------------------- */
+
+export type CaseCommandCreatePayload = {
+  debtor_type: string;
+  contract_type: string;
+  debtor_name?: string;
+  principal_amount: string;
+  due_date?: string | null;
+  debtor_inn?: string;
+  debtor_ogrn?: string;
+  note?: string;
+  contract_data?: Record<string, any>;
+  auto_lookup_organization?: boolean;
+  auto_fill_debtor_name?: boolean;
+};
+
+export type CaseCommandDuplicateItem = {
+  case_id?: number;
+  name?: string | null;
+  inn?: string | null;
+  ogrn?: string | null;
+};
+
+export type CaseCommandReadiness = {
+  score?: number;
+  level?: "draft" | "partial" | "ready" | string;
+  warnings?: string[];
+  signals?: string[];
+};
+
+export type CaseCommandCreatePreviewResponse = {
+  ok?: boolean;
+  preview?: {
+    resolved_debtor_name?: string | null;
+    normalized_inn?: string | null;
+    normalized_ogrn?: string | null;
+    warnings?: string[];
+    hints?: string[];
+    payload?: Record<string, any>;
+    readiness?: CaseCommandReadiness;
+    duplicates_found?: CaseCommandDuplicateItem[];
+    organization?: Record<string, any> | null;
+  };
+};
+
+export type CaseCommandCreateResponse = {
+  ok?: boolean;
+  case?: {
+    id: number;
+    tenant_id?: number | null;
+    debtor_name?: string | null;
+    debtor_type?: string | null;
+    contract_type?: string | null;
+    principal_amount?: string | null;
+    due_date?: string | null;
+    status?: string | null;
+    is_archived?: boolean;
+    contract_data?: Record<string, any>;
+    meta?: Record<string, any>;
+    created_at?: string | null;
+    updated_at?: string | null;
+  };
+  command?: {
+    resolved_debtor_name?: string | null;
+    debtor_inn?: string | null;
+    debtor_ogrn?: string | null;
+    lookup_performed?: boolean;
+    organization_resolved?: boolean;
+    organization?: Record<string, any> | null;
+    duplicates_found?: CaseCommandDuplicateItem[];
+    readiness?: CaseCommandReadiness;
+  };
+  preview?: {
+    resolved_debtor_name?: string | null;
+    normalized_inn?: string | null;
+    normalized_ogrn?: string | null;
+    warnings?: string[];
+    hints?: string[];
+    payload?: Record<string, any>;
+    readiness?: CaseCommandReadiness;
+    duplicates_found?: CaseCommandDuplicateItem[];
+    organization?: Record<string, any> | null;
+  };
+};
+
+function buildLegacyCreateCasePayload(payload: CaseCommandCreatePayload) {
+  const note = String(payload.note || "").trim();
+  const debtorInn = String(payload.debtor_inn || "").trim();
+  const debtorOgrn = String(payload.debtor_ogrn || "").trim();
+
+  return {
+    debtor_type: payload.debtor_type,
+    debtor_name: String(payload.debtor_name || "").trim(),
+    contract_type: payload.contract_type,
+    principal_amount: String(payload.principal_amount || "").trim(),
+    due_date: payload.due_date || null,
+    contract_data: {
+      ...(payload.contract_data || {}),
+      ...(note ? { note } : {}),
+      debtor: {
+        ...(((payload.contract_data || {}).debtor as Record<string, any>) || {}),
+        ...(debtorInn ? { inn: debtorInn } : {}),
+        ...(debtorOgrn ? { ogrn: debtorOgrn } : {}),
+      },
+    },
+  };
+}
+
+function computeFallbackReadiness(input: {
+  resolvedDebtorName?: string | null;
+  normalizedInn?: string | null;
+  normalizedOgrn?: string | null;
+  dueDate?: string | null;
+  principalAmount?: string | null;
+  organizationResolved?: boolean;
+  warnings?: string[];
+}) {
+  let score = 0;
+  const signals: string[] = [];
+  const warnings = [...(input.warnings || [])];
+
+  if (input.resolvedDebtorName) score += 20;
+  else warnings.push("missing_debtor_name");
+
+  if (input.normalizedInn) score += 20;
+  else warnings.push("missing_inn");
+
+  if (input.normalizedOgrn) score += 10;
+
+  if (input.organizationResolved) {
+    score += 20;
+    signals.push("organization_resolved");
+  }
+
+  if (input.principalAmount && String(input.principalAmount).trim()) score += 15;
+
+  if (input.dueDate) score += 15;
+  else warnings.push("missing_due_date");
+
+  let level: "draft" | "partial" | "ready" = "draft";
+  if (score >= 70) level = "ready";
+  else if (score >= 40) level = "partial";
+
+  return {
+    score,
+    level,
+    warnings,
+    signals,
+  };
+}
+
+export async function previewCaseCommandCreate(
+  payload: CaseCommandCreatePayload
+): Promise<CaseCommandCreatePreviewResponse> {
+  const res = await fetch(withWorkspace(`${API_BASE}/case-commands/create/preview`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (res.status !== 404) {
+    return parseResponse<CaseCommandCreatePreviewResponse>(res);
+  }
+
+  const warnings: string[] = [];
+  const hints: string[] = [];
+
+  let resolvedDebtorName = String(payload.debtor_name || "").trim() || null;
+  let normalizedInn = String(payload.debtor_inn || "").trim() || null;
+  let normalizedOgrn = String(payload.debtor_ogrn || "").trim() || null;
+  let organization: Record<string, any> | null = null;
+
+  const shouldLookup =
+    payload.auto_lookup_organization !== false &&
+    (!!normalizedInn || !!normalizedOgrn);
+
+  if ((!resolvedDebtorName || shouldLookup) && shouldLookup) {
+    try {
+      const found = await lookupOrganization({
+        inn: normalizedInn || undefined,
+        ogrn: normalizedOgrn || undefined,
+      });
+
+      organization = found || null;
+      normalizedInn = found?.inn || normalizedInn;
+      normalizedOgrn = found?.ogrn || normalizedOgrn;
+
+      if (!resolvedDebtorName && payload.auto_fill_debtor_name !== false) {
+        resolvedDebtorName = found?.name_full || found?.name || resolvedDebtorName;
+      }
+
+      hints.push("Организация разрешена через lookup.");
+    } catch {
+      warnings.push("Не удалось автоматически разрешить организацию по ИНН/ОГРН.");
+    }
+  }
+
+  if (!resolvedDebtorName) {
+    warnings.push("Не заполнено наименование должника.");
+  }
+
+  if (!String(payload.principal_amount || "").trim()) {
+    warnings.push("Не заполнена сумма долга.");
+  }
+
+  if (!payload.due_date) {
+    warnings.push("Срок оплаты не указан.");
+  }
+
+  const readiness = computeFallbackReadiness({
+    resolvedDebtorName,
+    normalizedInn,
+    normalizedOgrn,
+    dueDate: payload.due_date || null,
+    principalAmount: payload.principal_amount || null,
+    organizationResolved: Boolean(organization),
+    warnings,
+  });
+
+  return {
+    ok: true,
+    preview: {
+      resolved_debtor_name: resolvedDebtorName,
+      normalized_inn: normalizedInn,
+      normalized_ogrn: normalizedOgrn,
+      warnings: readiness.warnings,
+      hints,
+      organization,
+      duplicates_found: [],
+      readiness,
+      payload: buildLegacyCreateCasePayload({
+        ...payload,
+        debtor_name: resolvedDebtorName || payload.debtor_name,
+        debtor_inn: normalizedInn || undefined,
+        debtor_ogrn: normalizedOgrn || undefined,
+      }),
+    },
+  };
+}
+
+export async function createCaseCommand(
+  payload: CaseCommandCreatePayload
+): Promise<CaseCommandCreateResponse> {
+  const res = await fetch(withWorkspace(`${API_BASE}/case-commands/create`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+
+  if (res.status !== 404) {
+    return parseResponse<CaseCommandCreateResponse>(res);
+  }
+
+  const previewResult = await previewCaseCommandCreate(payload);
+  const nextPreview = previewResult?.preview || {};
+
+  const legacyPayload = buildLegacyCreateCasePayload({
+    ...payload,
+    debtor_name: nextPreview.resolved_debtor_name || payload.debtor_name,
+    debtor_inn: nextPreview.normalized_inn || payload.debtor_inn,
+    debtor_ogrn: nextPreview.normalized_ogrn || payload.debtor_ogrn,
+  });
+
+  const created = await createCase(legacyPayload);
+
+  return {
+    ok: true,
+    case: created,
+    command: {
+      resolved_debtor_name:
+        nextPreview.resolved_debtor_name || legacyPayload.debtor_name || null,
+      debtor_inn: nextPreview.normalized_inn || payload.debtor_inn || null,
+      debtor_ogrn: nextPreview.normalized_ogrn || payload.debtor_ogrn || null,
+      lookup_performed: Boolean(payload.debtor_inn || payload.debtor_ogrn),
+      organization_resolved: Boolean(nextPreview.organization),
+      organization: nextPreview.organization || null,
+      duplicates_found: nextPreview.duplicates_found || [],
+      readiness: nextPreview.readiness,
+    },
+    preview: {
+      resolved_debtor_name:
+        nextPreview.resolved_debtor_name || legacyPayload.debtor_name || null,
+      normalized_inn: nextPreview.normalized_inn || payload.debtor_inn || null,
+      normalized_ogrn: nextPreview.normalized_ogrn || payload.debtor_ogrn || null,
+      warnings: nextPreview.warnings || [],
+      hints: [...(nextPreview.hints || []), "Использован legacy createCase fallback."],
+      payload: legacyPayload,
+      readiness: nextPreview.readiness,
+      duplicates_found: nextPreview.duplicates_found || [],
+      organization: nextPreview.organization || null,
+    },
+  };
 }

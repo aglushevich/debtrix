@@ -7,9 +7,13 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from backend.app.api.batch_action_router import router as batch_action_router
+from backend.app.api.case_command_router import router as case_command_router
+from backend.app.api.control_room_router import router as control_room_router
 from backend.app.api.creditor_profile_router import router as creditor_profile_router
 from backend.app.api.document_download_router import router as document_download_router
 from backend.app.api.execution_log_router import router as execution_router
+from backend.app.api.workspace_router import router as workspace_router
 from backend.app.database import get_db
 from backend.app.schema_bootstrap import ensure_schema
 
@@ -154,6 +158,10 @@ app.add_middleware(
 app.include_router(execution_router)
 app.include_router(creditor_profile_router)
 app.include_router(document_download_router)
+app.include_router(batch_action_router)
+app.include_router(control_room_router)
+app.include_router(workspace_router)
+app.include_router(case_command_router)
 
 
 @app.on_event("startup")

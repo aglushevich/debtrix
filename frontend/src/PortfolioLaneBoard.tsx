@@ -1,4 +1,5 @@
 import { formatDebtorType } from "./legalLabels";
+import { buildWaitingHint, formatEligibleAt } from "./waitingEngine";
 
 type Props = {
   dashboard?: any;
@@ -44,14 +45,14 @@ function bucketHint(key: string, item: any): string {
   }
 
   if (key === "waiting") {
-    return item?.routing_status || "Ожидает окна выполнения";
+    return buildWaitingHint(item?.waiting_bucket || item);
   }
 
   if (key === "blocked") {
-    return item?.routing_status || "Нужна проверка данных и устранение blocker’ов";
+    return item?.routing_hint || item?.routing_status || "Нужна проверка данных и устранение blocker’ов";
   }
 
-  return item?.routing_status || "Требуется разбор маршрута";
+  return item?.routing_hint || item?.routing_status || "Требуется разбор маршрута";
 }
 
 export default function PortfolioLaneBoard({ dashboard, onOpenCase }: Props) {
@@ -136,13 +137,18 @@ export default function PortfolioLaneBoard({ dashboard, onOpenCase }: Props) {
                       <div className="lane-card-name">{item.debtor_name || "—"}</div>
 
                       <div className="lane-card-meta">
-                        {item.contract_type || "—"} ·{" "}
-                        {formatDebtorType(item.debtor_type)}
+                        {item.contract_type || "—"} · {formatDebtorType(item.debtor_type)}
                       </div>
 
                       <div className="triage-card-hint" style={{ marginTop: 6 }}>
                         {bucketHint(key, item)}
                       </div>
+
+                      {key === "waiting" && item?.waiting_eligible_at && (
+                        <div className="muted small" style={{ marginTop: 6 }}>
+                          Eligible at: {formatEligibleAt(item.waiting_eligible_at)}
+                        </div>
+                      )}
                     </button>
                   ))
                 ) : (

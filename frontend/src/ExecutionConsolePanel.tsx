@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
 import { getExecutionConsoleRuns } from "./api";
 
+type Props = {
+  refreshKey?: number;
+};
+
 function statusLabel(status?: string) {
   const map: Record<string, string> = {
     completed: "Завершён",
+    finished: "Завершён",
     running: "Выполняется",
     failed: "С ошибками",
     draft: "Черновик",
+    queued: "В очереди",
   };
   return map[status || ""] || status || "—";
 }
@@ -20,7 +26,7 @@ function formatDateTime(value?: string | null) {
   return date.toLocaleString("ru-RU");
 }
 
-export default function ExecutionConsolePanel() {
+export default function ExecutionConsolePanel({ refreshKey = 0 }: Props) {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
@@ -36,7 +42,7 @@ export default function ExecutionConsolePanel() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [refreshKey]);
 
   const items = data?.batch_jobs || [];
   const batchMetrics = data?.batch_metrics || {};
@@ -54,6 +60,12 @@ export default function ExecutionConsolePanel() {
             Мониторинг batch jobs и automation runs внутри Recovery Control Room.
           </div>
         </div>
+
+        <div className="action-list">
+          <button className="secondary-btn" onClick={load} disabled={loading}>
+            {loading ? "Обновляем…" : "Обновить"}
+          </button>
+        </div>
       </div>
 
       {loading && <div className="empty-box">Загрузка execution console…</div>}
@@ -66,7 +78,7 @@ export default function ExecutionConsolePanel() {
               <div className="ops-card-value">{batchMetrics.total || 0}</div>
               <div className="muted small">
                 running: {batchMetrics.running || 0} · completed:{" "}
-                {batchMetrics.completed || 0}
+                {batchMetrics.completed || batchMetrics.finished || 0}
               </div>
             </div>
 
@@ -75,7 +87,7 @@ export default function ExecutionConsolePanel() {
               <div className="ops-card-value">{automationMetrics.total || 0}</div>
               <div className="muted small">
                 running: {automationMetrics.running || 0} · completed:{" "}
-                {automationMetrics.completed || 0}
+                {automationMetrics.completed || automationMetrics.finished || 0}
               </div>
             </div>
 

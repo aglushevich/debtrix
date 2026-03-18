@@ -5,11 +5,17 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from backend.app.models import Case, DebtorProfile
+from backend.app.models.case import Case
+from backend.app.models.debtor_profile import DebtorProfile
 from backend.app.services.action_service import get_available_actions
 from backend.app.services.case_service import (
     debtor_widget,
     get_projection_data_or_rebuild,
+)
+from backend.app.services.debtor_intelligence_service import (
+    build_debtor_intelligence_payload,
+    build_organization_starter_kit_payload,
+    build_routing_snapshot,
 )
 from backend.app.services.document_stage_service import get_available_documents
 from backend.app.services.legal_labels_service import (
@@ -39,7 +45,7 @@ def _get_soft_policy(case: Case) -> dict[str, int]:
     contract_data = dict(case.contract_data or {})
     raw = dict(contract_data.get("soft_policy") or {})
 
-    policy = {
+    return {
         "payment_due_notice_delay_days": int(
             raw.get(
                 "payment_due_notice_delay_days",
@@ -59,8 +65,6 @@ def _get_soft_policy(case: Case) -> dict[str, int]:
             )
         ),
     }
-
-    return policy
 
 
 def _build_policy_timing(case: Case) -> dict[str, Any]:
@@ -138,7 +142,7 @@ def _related_cases(db: Session, case: Case) -> dict[str, Any]:
         total = sum(float(x["principal_amount"]) for x in items)
         total_amount = f"{total:.2f}"
     except Exception:
-        total_amount = "0.00"
+        pass
 
     return {
         "debtor": {
@@ -178,9 +182,13 @@ def build_case_dashboard(db: Session, case_id: int) -> dict[str, Any]:
         else None
     )
 
+    # 🔥 ВАЖНО: извлекаем smart из meta
+    smart = ((case.meta or {}).get("smart") or {})
+
     dashboard_case = {
         "id": case.id,
         "tenant_id": case.tenant_id,
+        "organization_id": case.organization_id,
         "debtor_name": case.debtor_name,
         "debtor_type": getattr(case.debtor_type, "value", case.debtor_type),
         "debtor_type_title": get_debtor_type_title(case.debtor_type),
@@ -191,6 +199,7 @@ def build_case_dashboard(db: Session, case_id: int) -> dict[str, Any]:
         "status": case_status_code,
         "status_title": get_case_status_title(case_status_code),
         "is_archived": bool(getattr(case, "is_archived", False)),
+        "meta": case.meta or {},
     }
 
     stage_block = dict((projection or {}).get("stage") or {})
@@ -200,6 +209,10 @@ def build_case_dashboard(db: Session, case_id: int) -> dict[str, Any]:
     return {
         **projection,
         "case": dashboard_case,
+
+        # 🔥 КЛЮЧЕВОЕ — теперь smart доступен напрямую
+        "smart": smart,
+
         "status": enrich_status_block(case_status_code),
         "stage": stage_block,
         "next_step": next_step,
@@ -209,4 +222,7 @@ def build_case_dashboard(db: Session, case_id: int) -> dict[str, Any]:
         "debtor_registry": _related_cases(db, case),
         "soft_policy": _get_soft_policy(case),
         "policy_timing": _build_policy_timing(case),
+        "debtor_intelligence": build_debtor_intelligence_payload(db, case),
+        "organization_starter_kit": build_organization_starter_kit_payload(db, case),
+        "routing": build_routing_snapshot(case),
     }

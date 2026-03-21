@@ -39,3 +39,4 @@ tmp/
 # Uploaded/generated files
 uploads/
 generated/
+*.tsbuildinfo

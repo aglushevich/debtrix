@@ -140,6 +140,8 @@ from backend.app.services.tenant_query_service import (
 from backend.app.services.tenant_service import bootstrap_tenants_for_existing_data
 from backend.app.services.waiting_bucket_service import list_waiting_buckets
 
+from backend.app.api.recovery_dashboard_router import router as recovery_dashboard_router
+
 app = FastAPI(
     title="Debtrix",
     description="Debtrix — process engine / case engine для взыскания задолженности",
@@ -162,6 +164,7 @@ app.include_router(batch_action_router)
 app.include_router(control_room_router)
 app.include_router(workspace_router)
 app.include_router(case_command_router)
+app.include_router(recovery_dashboard_router)
 
 
 @app.on_event("startup")

@@ -7,8 +7,11 @@ import {
   waitingBadgeLabel,
 } from "./waitingEngine";
 
+export type WaitingPreset = "waiting_next";
+
 type Props = {
   onOpenCase: (caseId: number) => void;
+  onOpenPreset?: (preset: WaitingPreset) => void;
 };
 
 function formatMoney(value: any): string {
@@ -21,7 +24,7 @@ function formatMoney(value: any): string {
   });
 }
 
-export default function WaitingBucketsPanel({ onOpenCase }: Props) {
+export default function WaitingBucketsPanel({ onOpenCase, onOpenPreset }: Props) {
   const [items, setItems] = useState<WaitingBucketItem[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -67,16 +70,29 @@ export default function WaitingBucketsPanel({ onOpenCase }: Props) {
             Waiting Buckets
           </div>
           <div className="muted">
-            Кейсы, которые ещё не готовы к действию, но уже находятся в очереди будущей
-            пропускной способности.
+            Кейсы, которые ещё не готовы к действию, но уже формируют будущую
+            пропускную способность портфеля.
           </div>
         </div>
       </div>
 
+      {!!onOpenPreset && (
+        <div className="action-list" style={{ marginTop: 16, flexWrap: "wrap" }}>
+          <button type="button" className="secondary-btn" onClick={() => onOpenPreset("waiting_next")}>
+            ⏳ Открыть waiting в registry ({items.length})
+          </button>
+        </div>
+      )}
+
       {loading && <div className="empty-box">Загрузка waiting buckets…</div>}
 
       {!loading && !items.length && (
-        <div className="empty-box">Ожидающих кейсов сейчас нет.</div>
+        <div className="empty-box">
+          Ожидающих кейсов сейчас нет.
+          <div className="muted small" style={{ marginTop: 8 }}>
+            Это хороший знак: в портфеле нет накопленного waiting backlog.
+          </div>
+        </div>
       )}
 
       {!loading && grouped.length > 0 && (
@@ -90,6 +106,18 @@ export default function WaitingBucketsPanel({ onOpenCase }: Props) {
                   </div>
                   <div className="muted small">Кейсов в ожидании: {stepItems.length}</div>
                 </div>
+
+                {!!onOpenPreset && (
+                  <div className="action-list">
+                    <button
+                      type="button"
+                      className="secondary-btn"
+                      onClick={() => onOpenPreset("waiting_next")}
+                    >
+                      Весь waiting registry
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="participants-list" style={{ marginTop: 12 }}>

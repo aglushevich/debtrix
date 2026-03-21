@@ -12,6 +12,7 @@ from backend.app.services.control_room_service import (
     get_control_room_summary,
     get_control_room_waiting_preview,
 )
+from backend.app.services.focus_queue_service import get_control_room_focus_queues
 from backend.app.services.tenant_query_service import resolve_current_tenant_id
 
 router = APIRouter(tags=["control-room"])
@@ -75,6 +76,21 @@ def control_room_execution_console(
         db,
         tenant_id=tenant_id,
         limit=limit,
+    )
+
+
+@router.get("/control-room/focus-queues")
+def control_room_focus_queues(
+    include_archived: bool = Query(default=False),
+    per_queue_limit: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(_get_current_tenant_id),
+):
+    return get_control_room_focus_queues(
+        db,
+        tenant_id=tenant_id,
+        include_archived=include_archived,
+        per_queue_limit=per_queue_limit,
     )
 
 

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getDebtorGraph } from "./api";
+import { formatCaseStatus, formatDebtorType } from "./legalLabels";
 
 type Props = {
   caseId: number | null;
@@ -14,6 +15,20 @@ function riskLabel(level?: string) {
     critical: "Критический",
   };
   return map[level || ""] || level || "—";
+}
+
+function formatMoney(value: any): string {
+  const num = Number(String(value ?? 0).replace(",", "."));
+  if (!Number.isFinite(num)) return String(value ?? "—");
+
+  return num.toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function safeStatusClass(status?: string) {
+  return `status-badge status-${String(status || "draft")}`;
 }
 
 export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
@@ -31,9 +46,9 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
       setLoading(true);
       setError("");
       const result = await getDebtorGraph(caseId);
-      setData(result);
+      setData(result || null);
     } catch (e: any) {
-      setError(e?.message || "Не удалось загрузить debtor graph");
+      setError(e?.message || "Не удалось загрузить debtor graph.");
       setData(null);
     } finally {
       setLoading(false);
@@ -41,21 +56,38 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, [caseId]);
+
+  const nodes = useMemo(() => data?.graph?.nodes || [], [data]);
+  const edges = useMemo(() => data?.graph?.edges || [], [data]);
+  const autoLinks = useMemo(() => data?.auto_links || [], [data]);
+  const relatedCases = useMemo(() => data?.related_cases || [], [data]);
+  const summary = data?.summary || {};
+  const recommendations = Array.isArray(data?.recommendations) ? data.recommendations : [];
+  const signals = Array.isArray(data?.signals) ? data.signals : summary?.signals || [];
 
   if (!caseId) return null;
 
-  const nodes = data?.graph?.nodes || [];
-  const edges = data?.graph?.edges || [];
-  const autoLinks = data?.auto_links || [];
-  const relatedCases = data?.related_cases || [];
-  const summary = data?.summary || {};
-  const recommendations = data?.recommendations || [];
-
   return (
-    <section className="panel">
-      <div className="panel-title">Debtor Graph</div>
+    <section className="panel case-embedded-panel">
+      <div className="section-header">
+        <div>
+          <div className="section-eyebrow">Debtor intelligence</div>
+          <div className="panel-title" style={{ marginBottom: 6 }}>
+            Debtor Graph
+          </div>
+          <div className="muted">
+            Intelligence-срез по должнику: связи, сигналы, риски и связанные кейсы.
+          </div>
+        </div>
+
+        <div className="action-list">
+          <button className="secondary-btn" onClick={() => void load()} disabled={loading}>
+            {loading ? "Обновляем…" : "Обновить"}
+          </button>
+        </div>
+      </div>
 
       {loading && <div className="empty-box">Загрузка debtor graph…</div>}
       {!loading && error && <div className="empty-box">{error}</div>}
@@ -86,8 +118,8 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
             </div>
           </div>
 
-          <div className="dashboard-grid">
-            <div className="panel">
+          <div className="dashboard-grid dashboard-grid-secondary">
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Карточка должника</div>
 
               <div className="info-grid">
@@ -98,7 +130,7 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
 
                 <div className="info-item">
                   <span className="label">Тип</span>
-                  <strong>{data?.debtor?.debtor_type || "—"}</strong>
+                  <strong>{formatDebtorType(data?.debtor?.debtor_type)}</strong>
                 </div>
 
                 <div className="info-item">
@@ -123,14 +155,19 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
               </div>
             </div>
 
-            <div className="panel">
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Сигналы</div>
 
-              {summary?.signals?.length ? (
+              {signals.length ? (
                 <div className="participants-list">
-                  {summary.signals.map((item: string, index: number) => (
+                  {signals.map((item: string, index: number) => (
                     <div className="participant-card" key={`${item}-${index}`}>
-                      <div className="participant-name">{item}</div>
+                      <div className="participant-card-top">
+                        <div>
+                          <div className="participant-role">Signal</div>
+                          <div className="participant-name">{item}</div>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -140,17 +177,27 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
             </div>
           </div>
 
-          <div className="dashboard-grid">
-            <div className="panel">
+          <div className="dashboard-grid dashboard-grid-secondary" style={{ marginTop: 16 }}>
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Graph nodes</div>
 
               {nodes.length ? (
                 <div className="participants-list">
                   {nodes.map((node: any) => (
                     <div className="participant-card" key={node.id}>
-                      <div className="participant-role">{node.type || "node"}</div>
-                      <div className="participant-name">{node.title || node.id}</div>
-                      <div className="muted small">{node.subtitle || "—"}</div>
+                      <div className="participant-card-top">
+                        <div>
+                          <div className="participant-role">{node.type || "node"}</div>
+                          <div className="participant-name">{node.title || node.id}</div>
+                        </div>
+                      </div>
+
+                      <div className="participant-meta-grid">
+                        <div className="info-item info-item-wide">
+                          <span className="label">Описание</span>
+                          <strong>{node.subtitle || "—"}</strong>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -159,18 +206,27 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
               )}
             </div>
 
-            <div className="panel">
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Graph edges</div>
 
               {edges.length ? (
                 <div className="participants-list">
                   {edges.map((edge: any, index: number) => (
                     <div className="participant-card" key={`${edge.source}-${edge.target}-${index}`}>
-                      <div className="participant-name">
-                        {edge.source} → {edge.target}
+                      <div className="participant-card-top">
+                        <div>
+                          <div className="participant-role">{edge.kind || "edge"}</div>
+                          <div className="participant-name">
+                            {edge.source} → {edge.target}
+                          </div>
+                        </div>
                       </div>
-                      <div className="muted small">
-                        {edge.label || edge.kind || "—"}
+
+                      <div className="participant-meta-grid">
+                        <div className="info-item info-item-wide">
+                          <span className="label">Описание</span>
+                          <strong>{edge.label || edge.kind || "—"}</strong>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -181,19 +237,36 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
             </div>
           </div>
 
-          <div className="dashboard-grid">
-            <div className="panel">
+          <div className="dashboard-grid dashboard-grid-secondary" style={{ marginTop: 16 }}>
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Auto links</div>
 
               {autoLinks.length ? (
                 <div className="participants-list">
                   {autoLinks.map((item: any, index: number) => (
                     <div className="participant-card" key={`${item.type}-${item.value}-${index}`}>
-                      <div className="participant-role">{item.type || "link"}</div>
-                      <div className="participant-name">{item.label || item.value}</div>
-                      <div className="muted small">
-                        {item.from?.title || item.from?.node_id || "—"} →{" "}
-                        {item.to?.title || item.to?.node_id || "—"}
+                      <div className="participant-card-top">
+                        <div>
+                          <div className="participant-role">{item.type || "link"}</div>
+                          <div className="participant-name">{item.label || item.value || "—"}</div>
+                        </div>
+                      </div>
+
+                      <div className="participant-meta-grid">
+                        <div className="info-item">
+                          <span className="label">Value</span>
+                          <strong>{item.value || "—"}</strong>
+                        </div>
+
+                        <div className="info-item">
+                          <span className="label">From</span>
+                          <strong>{item.from?.title || item.from?.node_id || "—"}</strong>
+                        </div>
+
+                        <div className="info-item">
+                          <span className="label">To</span>
+                          <strong>{item.to?.title || item.to?.node_id || "—"}</strong>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -203,7 +276,7 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
               )}
             </div>
 
-            <div className="panel">
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Связанные дела</div>
 
               {relatedCases.length ? (
@@ -216,13 +289,16 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
                     >
                       <div className="related-case-top">
                         <strong>Дело #{item.case_id}</strong>
-                        <span className="status-badge status-ready">
-                          {item.status || "—"}
+                        <span className={safeStatusClass(item.status)}>
+                          {formatCaseStatus(item.status)}
                         </span>
                       </div>
 
                       <div className="muted">
-                        {item.contract_type || "—"} · {item.principal_amount || "—"} ₽
+                        {item.contract_type || "—"} ·{" "}
+                        {item.principal_amount != null
+                          ? `${formatMoney(item.principal_amount)} ₽`
+                          : "—"}
                       </div>
 
                       <div className="muted small">
@@ -237,21 +313,26 @@ export default function DebtorGraphPanel({ caseId, onOpenCase }: Props) {
             </div>
           </div>
 
-          <div className="panel" style={{ marginTop: 16 }}>
+          <section className="panel panel-nested" style={{ marginTop: 16, marginBottom: 0 }}>
             <div className="panel-title">Рекомендации intelligence engine</div>
 
             {recommendations.length ? (
               <div className="participants-list">
                 {recommendations.map((item: string, index: number) => (
                   <div className="participant-card" key={`${item}-${index}`}>
-                    <div className="participant-name">{item}</div>
+                    <div className="participant-card-top">
+                      <div>
+                        <div className="participant-role">Recommendation</div>
+                        <div className="participant-name">{item}</div>
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
               <div className="empty-box">Рекомендаций пока нет.</div>
             )}
-          </div>
+          </section>
         </>
       )}
     </section>

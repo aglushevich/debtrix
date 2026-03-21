@@ -32,14 +32,19 @@ import PortfolioCasesTable from "./PortfolioCasesTable";
 import PortfolioLaneBoard from "./PortfolioLaneBoard";
 import PortfolioActionDock from "./PortfolioActionDock";
 import PriorityCasesPanel from "./PriorityCasesPanel";
+import type { PriorityPreset } from "./PriorityCasesPanel";
 import ControlRoomKPIs from "./ControlRoomKPIs";
 import IntelligencePortfolioPanel from "./IntelligencePortfolioPanel";
 import RoutingOverviewPanel from "./RoutingOverviewPanel";
 import WaitingBucketsPanel from "./WaitingBucketsPanel";
+import type { WaitingPreset } from "./WaitingBucketsPanel";
 import ExecutionSummaryPanel from "./ExecutionSummaryPanel";
+import FocusQueuesPanel from "./FocusQueuesPanel";
 import CaseWorkspace from "./CaseWorkspace";
 import WorkspaceSwitcher from "./WorkspaceSwitcher";
-import { buildPortfolioCaseRows } from "./portfolioSmart";
+import ControlRoomHero from "./ControlRoomHero";
+import ControlRoomLayout from "./ControlRoomLayout";
+import { buildPortfolioCaseRows, PortfolioCaseRow } from "./portfolioSmart";
 import {
   DEFAULT_PORTFOLIO_SORTING,
   PortfolioSorting,
@@ -57,6 +62,34 @@ type PortfolioSection =
   | "execution"
   | "filters";
 
+type RoutingBucketCode = "ready" | "waiting" | "blocked" | "idle";
+
+type FocusQueueCode =
+  | "urgent_ready"
+  | "blocked_cleanup"
+  | "waiting_next"
+  | "court_lane"
+  | "enforcement_lane";
+
+type ControlRoomPreset =
+  | {
+      type: "routing_bucket";
+      value: RoutingBucketCode;
+    }
+  | {
+      type: "focus_queue";
+      value: FocusQueueCode;
+    }
+  | {
+      type: "priority_preset";
+      value: PriorityPreset;
+    }
+  | {
+      type: "waiting_preset";
+      value: WaitingPreset;
+    }
+  | null;
+
 const portfolioSectionButtons: Array<{ key: PortfolioSection; label: string }> = [
   { key: "overview", label: "Overview" },
   { key: "lanes", label: "Routing lanes" },
@@ -65,6 +98,12 @@ const portfolioSectionButtons: Array<{ key: PortfolioSection; label: string }> =
   { key: "execution", label: "Execution" },
   { key: "filters", label: "Filters" },
 ];
+
+const DEFAULT_SOFT_POLICY: SoftPolicy = {
+  payment_due_notice_delay_days: 0,
+  debt_notice_delay_days: 3,
+  pretension_delay_days: 10,
+};
 
 function buildDisplayedOrganization(debtorProfile: any, organizationPreview: any) {
   if (debtorProfile) {
@@ -98,6 +137,7 @@ function normalizeSorting(input: any): PortfolioSorting {
   const direction = String(input?.direction || DEFAULT_PORTFOLIO_SORTING.direction);
 
   const allowedKeys = new Set([
+    "priority",
     "readiness",
     "smart_level",
     "warnings",
@@ -111,7 +151,9 @@ function normalizeSorting(input: any): PortfolioSorting {
   const allowedDirections = new Set(["asc", "desc"]);
 
   return {
-    key: allowedKeys.has(key) ? (key as PortfolioSorting["key"]) : DEFAULT_PORTFOLIO_SORTING.key,
+    key: allowedKeys.has(key)
+      ? (key as PortfolioSorting["key"])
+      : DEFAULT_PORTFOLIO_SORTING.key,
     direction: allowedDirections.has(direction)
       ? (direction as PortfolioSorting["direction"])
       : DEFAULT_PORTFOLIO_SORTING.direction,
@@ -126,16 +168,133 @@ function normalizeFilters(input: any): PortfolioFilters {
     debtor_type: input?.debtor_type || undefined,
     include_archived: Boolean(input?.include_archived),
     smart_level: (input?.smart_level || "") as PortfolioFilters["smart_level"],
+    priority_band: (input?.priority_band || "") as PortfolioFilters["priority_band"],
     warnings_only: Boolean(input?.warnings_only),
     duplicates_only: Boolean(input?.duplicates_only),
   };
 }
 
-const DEFAULT_SOFT_POLICY: SoftPolicy = {
-  payment_due_notice_delay_days: 0,
-  debt_notice_delay_days: 3,
-  pretension_delay_days: 10,
-};
+function matchesControlRoomPreset(
+  row: PortfolioCaseRow,
+  preset: ControlRoomPreset
+): boolean {
+  if (!preset) return true;
+
+  const routingStatus = String(row.smart?.routingStatus || "").toLowerCase();
+  const smartLevel = String(row.smart?.smartLevel || "").toLowerCase();
+  const routeLane = String(row.smart?.routeLane || "").toLowerCase();
+  const status = String(row.status || "").toLowerCase();
+  const priorityBand = String(
+    row.priority_band || row.smart?.priorityBand || ""
+  ).toLowerCase();
+
+  if (preset.type === "routing_bucket") {
+    if (preset.value === "ready") return routingStatus === "ready";
+    if (preset.value === "waiting") return routingStatus === "waiting";
+    if (preset.value === "blocked") return routingStatus === "blocked";
+    if (preset.value === "idle") return routingStatus === "idle";
+  }
+
+  if (preset.type === "focus_queue") {
+    switch (preset.value) {
+      case "urgent_ready":
+        return routingStatus === "ready" || smartLevel === "ready";
+
+      case "blocked_cleanup":
+        return routingStatus === "blocked" || smartLevel === "blocked";
+
+      case "waiting_next":
+        return routingStatus === "waiting" || smartLevel === "waiting";
+
+      case "court_lane":
+        return routeLane === "court_lane" || status === "court";
+
+      case "enforcement_lane":
+        return (
+          routeLane === "enforcement_lane" ||
+          status === "fssp" ||
+          status === "enforcement"
+        );
+
+      default:
+        return true;
+    }
+  }
+
+  if (preset.type === "priority_preset") {
+    switch (preset.value) {
+      case "critical":
+        return priorityBand === "critical";
+
+      case "high":
+        return priorityBand === "high";
+
+      case "blocked_cleanup":
+        return routingStatus === "blocked" || smartLevel === "blocked";
+
+      case "urgent_ready":
+        return (
+          !["blocked", "waiting"].includes(routingStatus) &&
+          (priorityBand === "critical" || priorityBand === "high")
+        );
+
+      default:
+        return true;
+    }
+  }
+
+  if (preset.type === "waiting_preset") {
+    if (preset.value === "waiting_next") {
+      return routingStatus === "waiting" || smartLevel === "waiting";
+    }
+  }
+
+  return true;
+}
+
+function controlRoomPresetLabel(preset: ControlRoomPreset): string | null {
+  if (!preset) return null;
+
+  if (preset.type === "routing_bucket") {
+    const map: Record<RoutingBucketCode, string> = {
+      ready: "Routing: Ready",
+      waiting: "Routing: Waiting",
+      blocked: "Routing: Blocked",
+      idle: "Routing: Idle",
+    };
+    return map[preset.value];
+  }
+
+  if (preset.type === "focus_queue") {
+    const map: Record<FocusQueueCode, string> = {
+      urgent_ready: "Focus queue: Urgent ready",
+      blocked_cleanup: "Focus queue: Blocked cleanup",
+      waiting_next: "Focus queue: Waiting next",
+      court_lane: "Focus queue: Court lane",
+      enforcement_lane: "Focus queue: Enforcement lane",
+    };
+    return map[preset.value];
+  }
+
+  if (preset.type === "priority_preset") {
+    const map: Record<PriorityPreset, string> = {
+      critical: "Priority preset: Critical",
+      high: "Priority preset: High",
+      blocked_cleanup: "Priority preset: Blocked cleanup",
+      urgent_ready: "Priority preset: Urgent ready",
+    };
+    return map[preset.value];
+  }
+
+  if (preset.type === "waiting_preset") {
+    const map: Record<WaitingPreset, string> = {
+      waiting_next: "Waiting preset: Waiting next",
+    };
+    return map[preset.value];
+  }
+
+  return null;
+}
 
 export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>("portfolio");
@@ -157,11 +316,13 @@ export default function App() {
   const [savedViews, setSavedViews] = useState<SavedViewItem[]>([]);
   const [activeViewId, setActiveViewId] = useState<number | null>(null);
   const [executionRefreshKey, setExecutionRefreshKey] = useState(0);
+  const [controlRoomPreset, setControlRoomPreset] = useState<ControlRoomPreset>(null);
 
   const [filters, setFilters] = useState<PortfolioFilters>({
     q: "",
     include_archived: false,
     smart_level: "",
+    priority_band: "",
     warnings_only: false,
     duplicates_only: false,
   });
@@ -195,22 +356,26 @@ export default function App() {
         getPortfolioRouting().catch(() => null),
       ]);
 
-      setAllCases(all || []);
-      setPortfolioCases(filtered || []);
+      const nextAllCases = Array.isArray(all) ? all : [];
+      const nextPortfolioCases = Array.isArray(filtered) ? filtered : [];
+
+      setAllCases(nextAllCases);
+      setPortfolioCases(nextPortfolioCases);
       setSavedViews(views.items || []);
       setControlRoomDashboard(controlRoom || null);
       setPortfolioRouting(routing || null);
 
       const currentSelectedExists =
-        selectedCase && (filtered || []).some((item: any) => item.id === selectedCase);
+        selectedCase != null &&
+        nextAllCases.some((item: any) => Number(item.id) === Number(selectedCase));
 
       if (!currentSelectedExists) {
-        const nextId = filtered?.[0]?.id || all?.[0]?.id || null;
+        const nextId = nextPortfolioCases?.[0]?.id || nextAllCases?.[0]?.id || null;
         setSelectedCase(nextId);
       }
 
       setSelectedCaseIds((prev) =>
-        prev.filter((id) => (all || []).some((item: any) => item.id === id))
+        prev.filter((id) => nextAllCases.some((item: any) => Number(item.id) === Number(id)))
       );
     } catch (e: any) {
       setError(e?.message || "Не удалось загрузить список дел");
@@ -263,19 +428,20 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadCases();
+    void loadCases();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
   useEffect(() => {
     if (selectedCase && viewMode === "case") {
-      loadCaseData(selectedCase);
+      void loadCaseData(selectedCase);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCase, viewMode]);
 
   async function afterCreate(createdCase?: any) {
     await loadCases();
+
     if (createdCase?.id) {
       setSelectedCase(createdCase.id);
       setViewMode("case");
@@ -399,6 +565,8 @@ export default function App() {
         "contract_type",
         "status",
         "principal_amount",
+        "priority_score",
+        "priority_band",
         "readiness_score",
         "smart_level",
         "warnings_count",
@@ -414,12 +582,26 @@ export default function App() {
 
   async function handleApplyView(item: SavedViewItem) {
     const result = await applySavedView(item.id);
-    setActiveViewId(item.id);
 
-    setFilters(normalizeFilters(result.filters || item.filters || {}));
-    setSorting(normalizeSorting(result.view?.sorting || item.sorting || DEFAULT_PORTFOLIO_SORTING));
+    setActiveViewId(item.id);
+    setControlRoomPreset(null);
     setSelectedCaseIds([]);
     setViewMode("portfolio");
+
+    setFilters(normalizeFilters(result.filters || item.filters || {}));
+    setSorting(
+      normalizeSorting(result.view?.sorting || item.sorting || DEFAULT_PORTFOLIO_SORTING)
+    );
+  }
+
+  function handleChangeFilters(next: PortfolioFilters) {
+    setActiveViewId(null);
+    setControlRoomPreset(null);
+    setFilters(next);
+  }
+
+  function handleChangeSorting(next: PortfolioSorting) {
+    setSorting(next);
   }
 
   function toggleCaseSelection(caseId: number) {
@@ -428,14 +610,65 @@ export default function App() {
     );
   }
 
+  function applyControlRoomPreset(preset: ControlRoomPreset) {
+    setViewMode("portfolio");
+    setPortfolioSection("registry");
+    setActiveViewId(null);
+    setControlRoomPreset(preset);
+    setSelectedCaseIds([]);
+  }
+
+  function handleOpenRoutingBucket(bucket: RoutingBucketCode) {
+    applyControlRoomPreset({
+      type: "routing_bucket",
+      value: bucket,
+    });
+  }
+
+  function handleOpenFocusQueue(queueCode: FocusQueueCode) {
+    applyControlRoomPreset({
+      type: "focus_queue",
+      value: queueCode,
+    });
+  }
+
+  function handleOpenPriorityPreset(preset: PriorityPreset) {
+    applyControlRoomPreset({
+      type: "priority_preset",
+      value: preset,
+    });
+  }
+
+  function handleOpenWaitingPreset(preset: WaitingPreset) {
+    applyControlRoomPreset({
+      type: "waiting_preset",
+      value: preset,
+    });
+  }
+
+  function clearControlRoomPreset() {
+    setControlRoomPreset(null);
+  }
+
   const portfolioCaseRows = useMemo(
-    () => buildPortfolioCaseRows(portfolioCases, portfolioRouting),
-    [portfolioCases, portfolioRouting]
+    () =>
+      buildPortfolioCaseRows(
+        portfolioCases,
+        portfolioRouting,
+        controlRoomDashboard?.priority_cases?.items || []
+      ),
+    [portfolioCases, portfolioRouting, controlRoomDashboard]
+  );
+
+  const presetFilteredPortfolioCaseRows = useMemo(
+    () =>
+      portfolioCaseRows.filter((row) => matchesControlRoomPreset(row, controlRoomPreset)),
+    [portfolioCaseRows, controlRoomPreset]
   );
 
   const filteredPortfolioCaseRows = useMemo(
-    () => applySmartPortfolioFilters(portfolioCaseRows, filters),
-    [portfolioCaseRows, filters]
+    () => applySmartPortfolioFilters(presetFilteredPortfolioCaseRows, filters),
+    [presetFilteredPortfolioCaseRows, filters]
   );
 
   const sortedPortfolioCaseRows = useMemo(
@@ -458,8 +691,8 @@ export default function App() {
   }
 
   const recommendation =
-    dashboard?.next_step?.title ||
     dashboard?.next_step?.title_ru ||
+    dashboard?.next_step?.title ||
     "Проверьте доступные документы и текущую стадию взыскания.";
 
   const relatedCases = dashboard?.debtor_registry?.related_cases || [];
@@ -472,9 +705,30 @@ export default function App() {
   );
 
   const selectedCaseCard = useMemo(
-    () => allCases.find((item: any) => item.id === selectedCase) || null,
+    () => allCases.find((item: any) => Number(item.id) === Number(selectedCase)) || null,
     [allCases, selectedCase]
   );
+
+  const hasSelectedCase = useMemo(
+    () => allCases.some((item: any) => Number(item.id) === Number(selectedCase)),
+    [allCases, selectedCase]
+  );
+
+  const selectedAmountText = useMemo(() => {
+    const selectedRows = sortedPortfolioCaseRows.filter((item: any) =>
+      selectedCaseIds.includes(item.id)
+    );
+
+    const amount = selectedRows.reduce(
+      (acc: number, item: any) => acc + parseAmount(item?.principal_amount),
+      0
+    );
+
+    return amount.toLocaleString("ru-RU", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  }, [sortedPortfolioCaseRows, selectedCaseIds]);
 
   const portfolioStats = useMemo(() => {
     const items = filteredPortfolioCaseRows || [];
@@ -496,6 +750,11 @@ export default function App() {
       totalAmount,
     };
   }, [filteredPortfolioCaseRows]);
+
+  const controlPresetLabel = useMemo(
+    () => controlRoomPresetLabel(controlRoomPreset),
+    [controlRoomPreset]
+  );
 
   return (
     <div className="layout">
@@ -519,7 +778,9 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <div
+            style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}
+          >
             <WorkspaceSwitcher />
 
             {viewMode === "case" && (
@@ -528,7 +789,7 @@ export default function App() {
               </button>
             )}
 
-            {viewMode === "portfolio" && selectedCase && (
+            {viewMode === "portfolio" && hasSelectedCase && selectedCase && (
               <button className="secondary-btn" onClick={() => openCase(selectedCase)}>
                 Открыть выбранное дело
               </button>
@@ -573,80 +834,164 @@ export default function App() {
               </div>
             </section>
 
-            {(portfolioSection === "overview" || portfolioSection === "filters") && (
-              <ControlRoomKPIs
-                dashboard={controlRoomDashboard}
-                portfolioStats={portfolioStats}
-                selectedCaseIds={selectedCaseIds}
+            {controlPresetLabel && (
+              <section className="panel" style={{ marginTop: 16 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div>
+                    <div className="section-eyebrow">Control room drilldown</div>
+                    <div className="panel-title" style={{ marginBottom: 6 }}>
+                      Активный операционный срез
+                    </div>
+                    <div className="muted">{controlPresetLabel}</div>
+                  </div>
+
+                  <button className="secondary-btn" onClick={clearControlRoomPreset}>
+                    Сбросить drilldown
+                  </button>
+                </div>
+              </section>
+            )}
+
+            {portfolioSection === "overview" && (
+              <ControlRoomLayout
+                hero={
+                  <ControlRoomHero
+                    summary={controlRoomDashboard?.summary}
+                    intelligenceKpi={controlRoomDashboard?.intelligence_kpi}
+                    selectedCount={selectedCaseIds.length}
+                    selectedAmount={selectedAmountText}
+                  />
+                }
+                top={
+                  <ControlRoomKPIs
+                    dashboard={controlRoomDashboard}
+                    portfolioStats={portfolioStats}
+                    selectedCaseIds={selectedCaseIds}
+                  />
+                }
+                main={
+                  <>
+                    <FocusQueuesPanel
+                      dashboard={controlRoomDashboard}
+                      selectedCase={selectedCase}
+                      onOpenCase={openCase}
+                      onOpenQueue={handleOpenFocusQueue}
+                    />
+
+                    <div className="dashboard-grid dashboard-grid-secondary">
+                      <IntelligencePortfolioPanel
+                        dashboard={controlRoomDashboard}
+                        cases={sortedPortfolioCaseRows}
+                        selectedCase={selectedCase}
+                        onOpenCase={openCase}
+                      />
+                      <ExecutionSummaryPanel execution={controlRoomDashboard?.execution} />
+                    </div>
+
+                    <PriorityCasesPanel
+                      dashboard={controlRoomDashboard}
+                      selectedCase={selectedCase}
+                      onOpenCase={openCase}
+                      onOpenPreset={handleOpenPriorityPreset}
+                    />
+
+                    <RoutingOverviewPanel
+                      routing={controlRoomDashboard?.routing}
+                      onOpenBucket={handleOpenRoutingBucket}
+                    />
+
+                    <PortfolioOperationsPanel
+                      cases={sortedPortfolioCaseRows}
+                      selectedCaseIds={selectedCaseIds}
+                      selectedCase={selectedCase}
+                      onOpenCase={openCase}
+                    />
+
+                    <PortfolioLaneBoard
+                      dashboard={controlRoomDashboard}
+                      onOpenCase={openCase}
+                    />
+
+                    <WaitingBucketsPanel
+                      onOpenCase={openCase}
+                      onOpenPreset={handleOpenWaitingPreset}
+                    />
+                  </>
+                }
+                side={<PortfolioActionDock selectedCaseIds={selectedCaseIds} />}
+                bottom={
+                  <>
+                    <PortfolioToolbar
+                      filters={filters}
+                      sorting={sorting}
+                      onChange={handleChangeFilters}
+                      onChangeSorting={handleChangeSorting}
+                      onSaveView={handleSaveView}
+                      activePresetLabel={controlPresetLabel}
+                      onClearPreset={clearControlRoomPreset}
+                    />
+
+                    <SavedViewsPanel
+                      items={savedViews}
+                      activeViewId={activeViewId}
+                      onApply={handleApplyView}
+                    />
+                  </>
+                }
               />
             )}
 
-            {(portfolioSection === "overview" || portfolioSection === "filters") && (
-              <IntelligencePortfolioPanel
-                dashboard={controlRoomDashboard}
-                cases={sortedPortfolioCaseRows}
-                selectedCase={selectedCase}
-                onOpenCase={openCase}
-              />
-            )}
-
-            {(portfolioSection === "overview" || portfolioSection === "lanes") && (
-              <PriorityCasesPanel
-                dashboard={controlRoomDashboard}
-                selectedCase={selectedCase}
-                onOpenCase={openCase}
-              />
-            )}
-
-            {(portfolioSection === "overview" || portfolioSection === "lanes") && (
-              <RoutingOverviewPanel routing={controlRoomDashboard?.routing} />
-            )}
-
-            {(portfolioSection === "overview" || portfolioSection === "execution") && (
-              <ExecutionSummaryPanel execution={controlRoomDashboard?.execution} />
-            )}
-
-            {(portfolioSection === "overview" || portfolioSection === "filters") && (
-              <PortfolioOperationsPanel
-                cases={sortedPortfolioCaseRows}
-                selectedCaseIds={selectedCaseIds}
-                selectedCase={selectedCase}
-                onOpenCase={openCase}
-              />
-            )}
-
-            {(portfolioSection === "overview" || portfolioSection === "filters") && (
+            {portfolioSection === "lanes" && (
               <>
-                <PortfolioToolbar
-                  filters={filters}
-                  sorting={sorting}
-                  onChange={setFilters}
-                  onChangeSorting={setSorting}
-                  onSaveView={handleSaveView}
+                <FocusQueuesPanel
+                  dashboard={controlRoomDashboard}
+                  selectedCase={selectedCase}
+                  onOpenCase={openCase}
+                  onOpenQueue={handleOpenFocusQueue}
                 />
 
-                <SavedViewsPanel
-                  items={savedViews}
-                  activeViewId={activeViewId}
-                  onApply={handleApplyView}
+                <PriorityCasesPanel
+                  dashboard={controlRoomDashboard}
+                  selectedCase={selectedCase}
+                  onOpenCase={openCase}
+                  onOpenPreset={handleOpenPriorityPreset}
                 />
+
+                <RoutingOverviewPanel
+                  routing={controlRoomDashboard?.routing}
+                  onOpenBucket={handleOpenRoutingBucket}
+                />
+
+                <div className="portfolio-workspace-grid">
+                  <div className="portfolio-workspace-main">
+                    <PortfolioLaneBoard
+                      dashboard={controlRoomDashboard}
+                      onOpenCase={openCase}
+                    />
+                    <WaitingBucketsPanel
+                      onOpenCase={openCase}
+                      onOpenPreset={handleOpenWaitingPreset}
+                    />
+                  </div>
+
+                  <div className="portfolio-workspace-side">
+                    <PortfolioActionDock selectedCaseIds={selectedCaseIds} />
+                  </div>
+                </div>
               </>
             )}
 
-            <div className="portfolio-workspace-grid">
-              <div className="portfolio-workspace-main">
-                {(portfolioSection === "overview" || portfolioSection === "lanes") && (
-                  <PortfolioLaneBoard
-                    dashboard={controlRoomDashboard}
-                    onOpenCase={openCase}
-                  />
-                )}
-
-                {(portfolioSection === "overview" || portfolioSection === "lanes") && (
-                  <WaitingBucketsPanel onOpenCase={openCase} />
-                )}
-
-                {(portfolioSection === "overview" || portfolioSection === "registry") && (
+            {portfolioSection === "registry" && (
+              <div className="portfolio-workspace-grid">
+                <div className="portfolio-workspace-main">
                   <PortfolioCasesTable
                     cases={sortedPortfolioCaseRows}
                     selectedCase={selectedCase}
@@ -654,10 +999,20 @@ export default function App() {
                     onOpenCase={openCase}
                     onToggleCaseSelection={toggleCaseSelection}
                     onToggleSelectAllVisible={toggleSelectAllVisible}
+                    activePresetLabel={controlPresetLabel}
+                    onClearPreset={clearControlRoomPreset}
                   />
-                )}
+                </div>
 
-                {(portfolioSection === "overview" || portfolioSection === "batch") && (
+                <div className="portfolio-workspace-side">
+                  <PortfolioActionDock selectedCaseIds={selectedCaseIds} />
+                </div>
+              </div>
+            )}
+
+            {portfolioSection === "batch" && (
+              <div className="portfolio-workspace-grid">
+                <div className="portfolio-workspace-main">
                   <BatchExecutionPanel
                     selectedCaseIds={selectedCaseIds}
                     onCompleted={async () => {
@@ -670,17 +1025,78 @@ export default function App() {
                       setExecutionRefreshKey((prev) => prev + 1);
                     }}
                   />
-                )}
+                </div>
 
-                {(portfolioSection === "overview" || portfolioSection === "execution") && (
+                <div className="portfolio-workspace-side">
+                  <PortfolioActionDock selectedCaseIds={selectedCaseIds} />
+                </div>
+              </div>
+            )}
+
+            {portfolioSection === "execution" && (
+              <div className="portfolio-workspace-grid">
+                <div className="portfolio-workspace-main">
+                  <ExecutionSummaryPanel execution={controlRoomDashboard?.execution} />
                   <ExecutionConsolePanel refreshKey={executionRefreshKey} />
-                )}
-              </div>
+                </div>
 
-              <div className="portfolio-workspace-side">
-                <PortfolioActionDock selectedCaseIds={selectedCaseIds} />
+                <div className="portfolio-workspace-side">
+                  <PortfolioActionDock selectedCaseIds={selectedCaseIds} />
+                </div>
               </div>
-            </div>
+            )}
+
+            {portfolioSection === "filters" && (
+              <>
+                <ControlRoomKPIs
+                  dashboard={controlRoomDashboard}
+                  portfolioStats={portfolioStats}
+                  selectedCaseIds={selectedCaseIds}
+                />
+
+                <PortfolioOperationsPanel
+                  cases={sortedPortfolioCaseRows}
+                  selectedCaseIds={selectedCaseIds}
+                  selectedCase={selectedCase}
+                  onOpenCase={openCase}
+                />
+
+                <PortfolioToolbar
+                  filters={filters}
+                  sorting={sorting}
+                  onChange={handleChangeFilters}
+                  onChangeSorting={handleChangeSorting}
+                  onSaveView={handleSaveView}
+                  activePresetLabel={controlPresetLabel}
+                  onClearPreset={clearControlRoomPreset}
+                />
+
+                <SavedViewsPanel
+                  items={savedViews}
+                  activeViewId={activeViewId}
+                  onApply={handleApplyView}
+                />
+
+                <div className="portfolio-workspace-grid">
+                  <div className="portfolio-workspace-main">
+                    <PortfolioCasesTable
+                      cases={sortedPortfolioCaseRows}
+                      selectedCase={selectedCase}
+                      selectedCaseIds={selectedCaseIds}
+                      onOpenCase={openCase}
+                      onToggleCaseSelection={toggleCaseSelection}
+                      onToggleSelectAllVisible={toggleSelectAllVisible}
+                      activePresetLabel={controlPresetLabel}
+                      onClearPreset={clearControlRoomPreset}
+                    />
+                  </div>
+
+                  <div className="portfolio-workspace-side">
+                    <PortfolioActionDock selectedCaseIds={selectedCaseIds} />
+                  </div>
+                </div>
+              </>
+            )}
           </>
         )}
 

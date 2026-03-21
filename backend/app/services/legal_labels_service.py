@@ -76,6 +76,17 @@ ROUTING_BUCKET_TITLES: dict[str, str] = {
     "eligible_now": "Готово к запуску",
     "not_applicable": "Не применимо",
     "already_processed": "Уже обработаны",
+    "soft_lane": "Soft lane",
+    "court_lane": "Court lane",
+    "enforcement_lane": "Enforcement lane",
+    "closed_lane": "Closed lane",
+}
+
+BLOCKER_REASON_TITLES: dict[str, str] = {
+    "missing_debtor_name": "Не указано имя/наименование должника",
+    "missing_principal_amount": "Не указана сумма долга",
+    "missing_due_date": "Не указан срок оплаты",
+    "missing_debtor_identifiers": "Не хватает ИНН/ОГРН должника",
 }
 
 
@@ -127,12 +138,18 @@ def get_routing_bucket_title(value: Any) -> str:
     return ROUTING_BUCKET_TITLES.get(code or "", code or "—")
 
 
+def get_blocker_reason_title(value: Any) -> str:
+    code = _normalize(value)
+    return BLOCKER_REASON_TITLES.get(code or "", code or "—")
+
+
 def enrich_action_item(item: dict[str, Any]) -> dict[str, Any]:
     code = item.get("code")
+    title_ru = get_action_title_ru(code, item.get("title"))
     return {
         **item,
-        "title_ru": get_action_title_ru(code, item.get("title")),
-        "title": get_action_title_ru(code, item.get("title")),
+        "title_ru": title_ru,
+        "title": title_ru,
     }
 
 

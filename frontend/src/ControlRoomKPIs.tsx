@@ -20,6 +20,12 @@ function formatMoney(value: number): string {
   });
 }
 
+function formatMetric(value: number): string {
+  return value.toLocaleString("ru-RU", {
+    maximumFractionDigits: 1,
+  });
+}
+
 export default function ControlRoomKPIs({
   dashboard,
   portfolioStats,
@@ -35,12 +41,25 @@ export default function ControlRoomKPIs({
   const courtCases = summary.court_cases ?? portfolioStats.court;
   const fsspCases = summary.fssp_cases ?? portfolioStats.fssp;
   const closedCases = summary.closed_cases ?? portfolioStats.closed;
-  const blockedCases = summary.blocked_cases ?? routingSummary.blocked ?? 0;
-  const readyCases = routingSummary.ready ?? 0;
-  const waitingCases = routingSummary.waiting ?? 0;
+
+  const blockedCases =
+    intelligenceKpi.blocked_cases ?? summary.blocked_cases ?? routingSummary.blocked ?? 0;
+  const readyCases = intelligenceKpi.ready_now_cases ?? routingSummary.ready ?? 0;
+  const waitingCases = intelligenceKpi.waiting_cases ?? routingSummary.waiting ?? 0;
+
   const highRiskCases = intelligenceKpi.high_risk_cases ?? 0;
   const criticalCases = intelligenceKpi.critical_cases ?? 0;
+  const courtLaneCases = intelligenceKpi.court_lane_cases ?? 0;
+  const enforcementLaneCases = intelligenceKpi.enforcement_lane_cases ?? 0;
+
   const totalAmount = portfolioStats.totalAmount ?? 0;
+
+  const avgRiskScore = Number(intelligenceKpi.avg_risk_score ?? 0);
+  const avgPriorityScore = Number(intelligenceKpi.avg_priority_score ?? 0);
+  const readyPressure = Number(intelligenceKpi.ready_pressure ?? 0);
+  const waitingPressure = Number(intelligenceKpi.waiting_pressure ?? 0);
+  const blockedPressure = Number(intelligenceKpi.blocked_pressure ?? 0);
+  const healthScore = Number(intelligenceKpi.portfolio_health_score ?? 0);
 
   return (
     <section className="panel control-room-kpis-panel">
@@ -68,7 +87,7 @@ export default function ControlRoomKPIs({
 
         <div className="control-room-kpi-hero-side">
           <div className="control-room-kpi-hero-card tone-success">
-            <span>Ready</span>
+            <span>Ready now</span>
             <strong>{readyCases}</strong>
             <div className="muted small">Можно брать в работу сейчас</div>
           </div>
@@ -107,15 +126,15 @@ export default function ControlRoomKPIs({
         </div>
 
         <div className="portfolio-kpi-card tone-neutral">
-          <div className="portfolio-kpi-label">Суд</div>
-          <div className="portfolio-kpi-value">{courtCases}</div>
+          <div className="portfolio-kpi-label">Court lane</div>
+          <div className="portfolio-kpi-value">{courtLaneCases || courtCases}</div>
           <div className="portfolio-kpi-subtitle">Судебный трек</div>
         </div>
 
         <div className="portfolio-kpi-card tone-neutral">
-          <div className="portfolio-kpi-label">ФССП</div>
-          <div className="portfolio-kpi-value">{fsspCases}</div>
-          <div className="portfolio-kpi-subtitle">Исполнительное производство</div>
+          <div className="portfolio-kpi-label">Enforcement lane</div>
+          <div className="portfolio-kpi-value">{enforcementLaneCases || fsspCases}</div>
+          <div className="portfolio-kpi-subtitle">Исполнительный трек</div>
         </div>
 
         <div className="portfolio-kpi-card tone-warning">
@@ -128,6 +147,42 @@ export default function ControlRoomKPIs({
           <div className="portfolio-kpi-label">Critical</div>
           <div className="portfolio-kpi-value">{criticalCases}</div>
           <div className="portfolio-kpi-subtitle">Самые опасные кейсы</div>
+        </div>
+
+        <div className="portfolio-kpi-card tone-neutral">
+          <div className="portfolio-kpi-label">Avg risk</div>
+          <div className="portfolio-kpi-value">{formatMetric(avgRiskScore)}</div>
+          <div className="portfolio-kpi-subtitle">Средний intelligence risk</div>
+        </div>
+
+        <div className="portfolio-kpi-card tone-neutral">
+          <div className="portfolio-kpi-label">Avg priority</div>
+          <div className="portfolio-kpi-value">{formatMetric(avgPriorityScore)}</div>
+          <div className="portfolio-kpi-subtitle">Средний priority score</div>
+        </div>
+
+        <div className="portfolio-kpi-card tone-success">
+          <div className="portfolio-kpi-label">Ready pressure</div>
+          <div className="portfolio-kpi-value">{formatMetric(readyPressure)}</div>
+          <div className="portfolio-kpi-subtitle">Нагрузка на ready-поток</div>
+        </div>
+
+        <div className="portfolio-kpi-card tone-warning">
+          <div className="portfolio-kpi-label">Waiting pressure</div>
+          <div className="portfolio-kpi-value">{formatMetric(waitingPressure)}</div>
+          <div className="portfolio-kpi-subtitle">Нагрузка на waiting-пул</div>
+        </div>
+
+        <div className="portfolio-kpi-card tone-danger">
+          <div className="portfolio-kpi-label">Blocked pressure</div>
+          <div className="portfolio-kpi-value">{formatMetric(blockedPressure)}</div>
+          <div className="portfolio-kpi-subtitle">Нагрузка на blocked-поток</div>
+        </div>
+
+        <div className="portfolio-kpi-card tone-accent">
+          <div className="portfolio-kpi-label">Health score</div>
+          <div className="portfolio-kpi-value">{formatMetric(healthScore)}</div>
+          <div className="portfolio-kpi-subtitle">Интегральное здоровье портфеля</div>
         </div>
 
         <div className="portfolio-kpi-card tone-neutral">

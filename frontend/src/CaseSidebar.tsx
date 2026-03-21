@@ -1,4 +1,5 @@
-import { ReactNode } from "react";
+import { ReactNode, useMemo } from "react";
+import { formatCaseStatus } from "./legalLabels";
 
 type Props = {
   cases: any[];
@@ -6,19 +7,6 @@ type Props = {
   onSelect: (caseId: number) => void;
   children?: ReactNode;
 };
-
-function formatCaseStatus(status?: string) {
-  const map: Record<string, string> = {
-    draft: "Черновик",
-    overdue: "Просрочка",
-    pretrial: "Досудебная стадия",
-    court: "Суд",
-    fssp: "ФССП",
-    enforcement: "Исполнение",
-    closed: "Закрыто",
-  };
-  return map[status || ""] || status || "—";
-}
 
 function statusClass(status?: string) {
   return `status-badge status-${status || "draft"}`;
@@ -34,15 +22,41 @@ function formatMoney(value: any): string {
   });
 }
 
+function normalizeCases(items: any[]) {
+  return Array.isArray(items) ? items : [];
+}
+
 export default function CaseSidebar({
   cases,
   selectedCase,
   onSelect,
   children,
 }: Props) {
-  const activeCase = cases.find((item) => item.id === selectedCase) || null;
-  const activeCount = cases.filter((item) => !item?.is_archived).length;
-  const archivedCount = cases.filter((item) => Boolean(item?.is_archived)).length;
+  const safeCases = useMemo(() => normalizeCases(cases), [cases]);
+
+  const activeCase = useMemo(
+    () => safeCases.find((item) => Number(item.id) === Number(selectedCase)) || null,
+    [safeCases, selectedCase]
+  );
+
+  const activeCount = useMemo(
+    () => safeCases.filter((item) => !item?.is_archived).length,
+    [safeCases]
+  );
+
+  const archivedCount = useMemo(
+    () => safeCases.filter((item) => Boolean(item?.is_archived)).length,
+    [safeCases]
+  );
+
+  const totalAmount = useMemo(
+    () =>
+      safeCases.reduce((acc, item) => {
+        const value = Number(String(item?.principal_amount ?? 0).replace(",", "."));
+        return acc + (Number.isFinite(value) ? value : 0);
+      }, 0),
+    [safeCases]
+  );
 
   return (
     <aside className="sidebar">
@@ -79,11 +93,27 @@ export default function CaseSidebar({
 
           <div className="sidebar-current-box">
             <span>Текущий фокус</span>
-            <strong>
-              {activeCase ? `Дело #${activeCase.id}` : "Дело не выбрано"}
-            </strong>
+            <strong>{activeCase ? `Дело #${activeCase.id}` : "Дело не выбрано"}</strong>
+
             <div className="sidebar-current-meta">
-              {activeCase ? activeCase.debtor_name || "Без названия должника" : "Открой дело из списка ниже"}
+              {activeCase
+                ? activeCase.debtor_name || "Без названия должника"
+                : "Открой дело из списка ниже"}
+            </div>
+
+            {activeCase ? (
+              <div className="sidebar-current-meta" style={{ marginTop: 8 }}>
+                {formatCaseStatus(activeCase.status)} ·{" "}
+                {formatMoney(activeCase.principal_amount)} ₽
+              </div>
+            ) : null}
+          </div>
+
+          <div className="sidebar-current-box" style={{ marginTop: 12 }}>
+            <span>Портфель</span>
+            <strong>{safeCases.length} дел</strong>
+            <div className="sidebar-current-meta" style={{ marginTop: 8 }}>
+              Общая сумма: {formatMoney(totalAmount)} ₽
             </div>
           </div>
         </section>
@@ -99,22 +129,24 @@ export default function CaseSidebar({
               </div>
             </div>
 
-            <div className="sidebar-counter">{cases.length}</div>
+            <div className="sidebar-counter">{safeCases.length}</div>
           </div>
 
           <div className="sidebar-case-list">
-            {cases.length ? (
-              cases.map((item) => {
-                const isCurrent = selectedCase === item.id;
+            {safeCases.length ? (
+              safeCases.map((item) => {
+                const isCurrent = Number(selectedCase) === Number(item.id);
 
                 return (
                   <button
+                    type="button"
                     key={item.id}
                     className={`sidebar-case-card ${isCurrent ? "is-current" : ""}`}
                     onClick={() => onSelect(item.id)}
                   >
                     <div className="sidebar-case-top">
                       <strong>Дело #{item.id}</strong>
+
                       <span className={statusClass(item.status)}>
                         {formatCaseStatus(item.status)}
                       </span>

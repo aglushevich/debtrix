@@ -1,10 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getDebtorDashboard } from "./api";
+import { formatCaseStatus, formatDebtorType } from "./legalLabels";
 
 type Props = {
   debtorId: number | null;
   onOpenCase?: (caseId: number) => void;
 };
+
+function formatMoney(value: any): string {
+  const num = Number(String(value ?? 0).replace(",", "."));
+  if (!Number.isFinite(num)) return String(value ?? "—");
+
+  return num.toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function safeStatusClass(status?: string) {
+  return `status-badge status-${String(status || "draft")}`;
+}
 
 export default function DebtorDashboardPanel({ debtorId, onOpenCase }: Props) {
   const [data, setData] = useState<any>(null);
@@ -21,9 +36,9 @@ export default function DebtorDashboardPanel({ debtorId, onOpenCase }: Props) {
       setLoading(true);
       setError("");
       const result = await getDebtorDashboard(debtorId);
-      setData(result);
+      setData(result || null);
     } catch (e: any) {
-      setError(e?.message || "Не удалось загрузить debtor dashboard");
+      setError(e?.message || "Не удалось загрузить debtor dashboard.");
       setData(null);
     } finally {
       setLoading(false);
@@ -31,18 +46,34 @@ export default function DebtorDashboardPanel({ debtorId, onOpenCase }: Props) {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, [debtorId]);
 
-  if (!debtorId) return null;
-
-  const cases = data?.cases || [];
+  const cases = useMemo(() => (Array.isArray(data?.cases) ? data.cases : []), [data]);
   const summary = data?.summary || {};
   const debtor = data?.debtor || {};
 
+  if (!debtorId) return null;
+
   return (
-    <section className="panel">
-      <div className="panel-title">Debtor Dashboard</div>
+    <section className="panel case-embedded-panel">
+      <div className="section-header">
+        <div>
+          <div className="section-eyebrow">Debtor portfolio layer</div>
+          <div className="panel-title" style={{ marginBottom: 6 }}>
+            Debtor Dashboard
+          </div>
+          <div className="muted">
+            Портфельный срез по должнику: связанные дела, суммы и активность.
+          </div>
+        </div>
+
+        <div className="action-list">
+          <button className="secondary-btn" onClick={() => void load()} disabled={loading}>
+            {loading ? "Обновляем…" : "Обновить"}
+          </button>
+        </div>
+      </div>
 
       {loading && <div className="empty-box">Загрузка debtor dashboard…</div>}
       {!loading && error && <div className="empty-box">{error}</div>}
@@ -61,8 +92,17 @@ export default function DebtorDashboardPanel({ debtorId, onOpenCase }: Props) {
             </div>
 
             <div className="summary-card">
+              <span className="label">Архивных</span>
+              <strong>{summary?.archived_cases_count ?? "—"}</strong>
+            </div>
+
+            <div className="summary-card">
               <span className="label">Общая сумма</span>
-              <strong>{summary?.total_principal_amount ?? "—"} ₽</strong>
+              <strong>
+                {summary?.total_principal_amount != null
+                  ? `${formatMoney(summary.total_principal_amount)} ₽`
+                  : "—"}
+              </strong>
             </div>
           </div>
 
@@ -74,7 +114,7 @@ export default function DebtorDashboardPanel({ debtorId, onOpenCase }: Props) {
 
             <div className="info-item">
               <span className="label">Тип</span>
-              <strong>{debtor?.debtor_type || "—"}</strong>
+              <strong>{formatDebtorType(debtor?.debtor_type)}</strong>
             </div>
 
             <div className="info-item">
@@ -103,17 +143,20 @@ export default function DebtorDashboardPanel({ debtorId, onOpenCase }: Props) {
                 >
                   <div className="related-case-top">
                     <strong>Дело #{item.case_id}</strong>
-                    <span className="status-badge status-ready">
-                      {item.status || "—"}
+                    <span className={safeStatusClass(item.status)}>
+                      {formatCaseStatus(item.status)}
                     </span>
                   </div>
 
                   <div className="muted">
-                    {item.contract_type || "—"} · {item.principal_amount || "—"} ₽
+                    {item.contract_type || "—"} ·{" "}
+                    {item.principal_amount != null
+                      ? `${formatMoney(item.principal_amount)} ₽`
+                      : "—"}
                   </div>
 
                   <div className="muted small">
-                    due: {item.due_date || "—"}
+                    Срок оплаты: {item.due_date || "—"}
                   </div>
                 </button>
               ))}

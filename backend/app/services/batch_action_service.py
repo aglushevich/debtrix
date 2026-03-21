@@ -44,6 +44,10 @@ def _normalize_action_codes(items: list[dict[str, Any]]) -> set[str]:
     return result
 
 
+def _status_value(value: Any) -> str:
+    return str(getattr(value, "value", value) or "").strip()
+
+
 def _extract_debtor_identifiers(case: Case) -> tuple[str | None, str | None]:
     contract_data = dict(case.contract_data or {})
     debtor = dict(contract_data.get("debtor") or {})
@@ -134,6 +138,30 @@ def _missing_identifier_reason(case: Case) -> str | None:
     return None
 
 
+def _operational_lane(case: Case) -> str:
+    status = _status_value(case.status)
+
+    if status in {"court"}:
+        return "court"
+    if status in {"fssp", "enforcement"}:
+        return "enforcement"
+    if status in {"closed"}:
+        return "closed"
+    return "soft"
+
+
+def _case_snapshot(case: Case) -> dict[str, Any]:
+    return {
+        "case_id": case.id,
+        "debtor_name": case.debtor_name,
+        "contract_type": _status_value(case.contract_type) or "unknown",
+        "debtor_type": _status_value(case.debtor_type) or "unknown",
+        "status": _status_value(case.status) or "unknown",
+        "lane": _operational_lane(case),
+        "is_archived": bool(getattr(case, "is_archived", False)),
+    }
+
+
 def _detect_case_bucket(
     db: Session,
     case: Case,
@@ -197,6 +225,308 @@ def _detect_case_bucket(
     }
 
 
+def _build_guardrails(
+    cases: list[Case],
+    preview_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    contract_type_counts = Counter(
+        _status_value(case.contract_type) or "unknown" for case in cases
+    )
+    debtor_type_counts = Counter(
+        _status_value(case.debtor_type) or "unknown" for case in cases
+    )
+    status_counts = Counter(
+        _status_value(case.status) or "unknown" for case in cases
+    )
+    lane_counts = Counter(_operational_lane(case) for case in cases)
+
+    bucket_counts = Counter(str(item.get("bucket") or "unknown") for item in preview_items)
+    archived_count = sum(1 for case in cases if bool(getattr(case, "is_archived", False)))
+    total = len(cases) or 1
+
+    warnings: list[dict[str, Any]] = []
+
+    def add_warning(code: str, message: str, severity: str) -> None:
+        warnings.append(
+            {
+                "code": code,
+                "message": message,
+                "severity": severity,
+            }
+        )
+
+    if len(contract_type_counts) > 1:
+        add_warning(
+            "mixed_contract_types",
+            "В пакете смешаны разные типы договоров. Лучше запускать batch по одному типу договора.",
+            "medium",
+        )
+
+    if len(debtor_type_counts) > 1:
+        add_warning(
+            "mixed_debtor_types",
+            "В пакете смешаны разные типы должников. Это снижает однородность исполнения.",
+            "medium",
+        )
+
+    if len(lane_counts) > 1:
+        add_warning(
+            "mixed_operational_lanes",
+            "В пакете смешаны soft / court / enforcement кейсы. Лучше разделить пакет по operational lane.",
+            "high",
+        )
+
+    if archived_count > 0:
+        add_warning(
+            "contains_archived_cases",
+            "В пакете есть архивные дела. Проверь, действительно ли их нужно запускать повторно.",
+            "medium",
+        )
+
+    if bucket_counts.get("blocked", 0) / total >= 0.3:
+        add_warning(
+            "high_blocked_share",
+            "Слишком большая доля blocked-кейсов. Сначала выгоднее убрать blocker’ы.",
+            "high",
+        )
+
+    if bucket_counts.get("waiting", 0) / total >= 0.4:
+        add_warning(
+            "high_waiting_share",
+            "Большая часть пакета ещё waiting. Пакет лучше отложить или очистить до eligible subset.",
+            "medium",
+        )
+
+    if bucket_counts.get("eligible_now", 0) == 0:
+        add_warning(
+            "no_eligible_now",
+            "В пакете нет кейсов, готовых к немедленному запуску.",
+            "high",
+        )
+
+    if bucket_counts.get("already_processed", 0) > 0:
+        add_warning(
+            "contains_already_processed",
+            "В пакете есть уже обработанные кейсы. Проверь, не будет ли дубля действий.",
+            "low",
+        )
+
+    severe = {item["severity"] for item in warnings}
+    if "high" in severe:
+        recommended_mode = "cleanup_first"
+    elif warnings:
+        recommended_mode = "review_before_run"
+    else:
+        recommended_mode = "safe_to_run"
+
+    if recommended_mode == "safe_to_run":
+        recommended_action = "Пакет выглядит однородным. Можно строить preview и запускать eligible subset."
+    elif recommended_mode == "review_before_run":
+        recommended_action = "Пакет рабочий, но перед запуском лучше очистить mixed cases и проверить waiting/blocked."
+    else:
+        recommended_action = "Сначала разберись с blocker’ами, waiting и смешанными operational lanes, затем запускай пакет."
+
+    return {
+        "is_homogeneous": (
+            len(contract_type_counts) <= 1
+            and len(debtor_type_counts) <= 1
+            and len(lane_counts) <= 1
+        ),
+        "recommended_mode": recommended_mode,
+        "recommended_action": recommended_action,
+        "warnings": warnings,
+        "selection": {
+            "total_cases": len(cases),
+            "archived_cases": archived_count,
+            "counts_by_contract_type": dict(contract_type_counts),
+            "counts_by_debtor_type": dict(debtor_type_counts),
+            "counts_by_status": dict(status_counts),
+            "counts_by_lane": dict(lane_counts),
+            "counts_by_bucket": dict(bucket_counts),
+        },
+    }
+
+
+def _sort_waiting_items(waiting_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _key(item: dict[str, Any]) -> tuple[int, str]:
+        eligible_at = item.get("eligible_at")
+        if not eligible_at:
+            return (1, "")
+        return (0, str(eligible_at))
+
+    return sorted(waiting_items, key=_key)
+
+
+def _build_subset(
+    *,
+    code: str,
+    title: str,
+    description: str,
+    case_ids: list[int],
+    recommended: bool = False,
+) -> dict[str, Any]:
+    unique_case_ids = list(dict.fromkeys(case_ids))
+    return {
+        "code": code,
+        "title": title,
+        "description": description,
+        "count": len(unique_case_ids),
+        "case_ids": unique_case_ids,
+        "recommended": recommended,
+    }
+
+
+def _build_suggested_subsets(
+    cases: list[Case],
+    preview_items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str | None]:
+    preview_by_case_id = {
+        int(item["case_id"]): item for item in preview_items if item.get("case_id") is not None
+    }
+    snapshots_by_case_id = {
+        int(case.id): _case_snapshot(case) for case in cases
+    }
+
+    eligible_case_ids = [
+        int(item["case_id"])
+        for item in preview_items
+        if str(item.get("bucket")) == "eligible_now"
+    ]
+
+    clean_ready_case_ids = [
+        case_id
+        for case_id in eligible_case_ids
+        if not bool((snapshots_by_case_id.get(case_id) or {}).get("is_archived"))
+    ]
+
+    waiting_items = _sort_waiting_items(
+        [item for item in preview_items if str(item.get("bucket")) == "waiting"]
+    )
+    waiting_soon_case_ids = [int(item["case_id"]) for item in waiting_items[:20]]
+
+    subsets: list[dict[str, Any]] = []
+
+    if clean_ready_case_ids:
+        subsets.append(
+            _build_subset(
+                code="clean_ready",
+                title="Готовые к запуску",
+                description="Чистый пакет: только eligible_now и без архивных дел.",
+                case_ids=clean_ready_case_ids,
+                recommended=True,
+            )
+        )
+
+    if eligible_case_ids and eligible_case_ids != clean_ready_case_ids:
+        subsets.append(
+            _build_subset(
+                code="eligible_now_all",
+                title="Все eligible now",
+                description="Все дела, доступные к запуску прямо сейчас.",
+                case_ids=eligible_case_ids,
+            )
+        )
+
+    if waiting_soon_case_ids:
+        subsets.append(
+            _build_subset(
+                code="waiting_soon",
+                title="Waiting soon",
+                description="Ближайшие waiting-кейсы по eligible_at.",
+                case_ids=waiting_soon_case_ids,
+            )
+        )
+
+    lane_groups: dict[str, list[int]] = {}
+    for case_id in eligible_case_ids:
+        lane = str((snapshots_by_case_id.get(case_id) or {}).get("lane") or "unknown")
+        lane_groups.setdefault(lane, []).append(case_id)
+
+    lane_titles = {
+        "soft": ("Soft stage", "Однородный пакет для soft-stage действий."),
+        "court": ("Court lane", "Однородный пакет для судебного контура."),
+        "enforcement": ("Enforcement lane", "Однородный пакет для enforcement / ФССП."),
+        "closed": ("Closed cases", "Закрытые дела, попавшие в выборку."),
+    }
+
+    for lane, case_ids in lane_groups.items():
+        if not case_ids:
+            continue
+        title, description = lane_titles.get(
+            lane,
+            (f"Lane: {lane}", f"Подборка дел operational lane = {lane}."),
+        )
+        subsets.append(
+            _build_subset(
+                code=f"lane_{lane}",
+                title=title,
+                description=description,
+                case_ids=case_ids,
+            )
+        )
+
+    contract_type_groups: dict[str, list[int]] = {}
+    for case_id in eligible_case_ids:
+        contract_type = str(
+            (snapshots_by_case_id.get(case_id) or {}).get("contract_type") or "unknown"
+        )
+        contract_type_groups.setdefault(contract_type, []).append(case_id)
+
+    for contract_type, case_ids in contract_type_groups.items():
+        if len(case_ids) < 2:
+            continue
+        subsets.append(
+            _build_subset(
+                code=f"contract_type_{contract_type}",
+                title=f"Договор: {contract_type}",
+                description="Однородный пакет по типу договора.",
+                case_ids=case_ids,
+            )
+        )
+
+    debtor_type_groups: dict[str, list[int]] = {}
+    for case_id in eligible_case_ids:
+        debtor_type = str(
+            (snapshots_by_case_id.get(case_id) or {}).get("debtor_type") or "unknown"
+        )
+        debtor_type_groups.setdefault(debtor_type, []).append(case_id)
+
+    for debtor_type, case_ids in debtor_type_groups.items():
+        if len(case_ids) < 2:
+            continue
+        subsets.append(
+            _build_subset(
+                code=f"debtor_type_{debtor_type}",
+                title=f"Должник: {debtor_type}",
+                description="Однородный пакет по типу должника.",
+                case_ids=case_ids,
+            )
+        )
+
+    # убираем дубликаты subset по совпадающему набору ids
+    deduped: list[dict[str, Any]] = []
+    seen_keys: set[tuple[int, ...]] = set()
+    for subset in subsets:
+        key = tuple(sorted(int(case_id) for case_id in subset["case_ids"]))
+        if not key:
+            continue
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(subset)
+
+    recommended_subset_code: str | None = None
+    for subset in deduped:
+        if subset.get("recommended"):
+            recommended_subset_code = str(subset["code"])
+            break
+
+    if not recommended_subset_code and deduped:
+        recommended_subset_code = str(deduped[0]["code"])
+
+    return deduped, recommended_subset_code
+
+
 def preview_batch_action(
     db: Session,
     *,
@@ -205,6 +535,7 @@ def preview_batch_action(
     case_ids: list[int],
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
+    cases: list[Case] = []
 
     grouped: dict[str, list[int]] = {
         "eligible_now": [],
@@ -221,6 +552,7 @@ def preview_batch_action(
             tenant_id=tenant_id,
             include_archived=True,
         )
+        cases.append(case)
 
         result = _detect_case_bucket(db, case, tenant_id, action_code)
         bucket = str(result["bucket"])
@@ -232,8 +564,12 @@ def preview_batch_action(
                 "bucket": bucket,
                 "reason": result.get("reason"),
                 "eligible_at": result.get("eligible_at"),
+                "snapshot": _case_snapshot(case),
             }
         )
+
+    guardrails = _build_guardrails(cases, items)
+    subsets, recommended_subset_code = _build_suggested_subsets(cases, items)
 
     return {
         "ok": True,
@@ -247,6 +583,9 @@ def preview_batch_action(
             "not_applicable": _build_bucket("not_applicable", grouped["not_applicable"]),
         },
         "items": items,
+        "guardrails": guardrails,
+        "subsets": subsets,
+        "recommended_subset_code": recommended_subset_code,
     }
 
 
@@ -259,6 +598,7 @@ def execute_batch_action(
     force: bool = False,
 ) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
+    cases: list[Case] = []
     executed_count = 0
 
     for case_id in case_ids:
@@ -268,8 +608,38 @@ def execute_batch_action(
             tenant_id=tenant_id,
             include_archived=True,
         )
+        cases.append(case)
 
         preview = _detect_case_bucket(db, case, tenant_id, action_code)
+
+        if preview["bucket"] in {"already_processed", "not_applicable"}:
+            results.append(
+                {
+                    "case_id": case.id,
+                    "status": preview["bucket"],
+                    "reason": preview.get("reason"),
+                    "eligible_at": preview.get("eligible_at"),
+                    "payload": None,
+                    "snapshot": _case_snapshot(case),
+                }
+            )
+            continue
+
+        if (
+            preview["bucket"] == "blocked"
+            and preview.get("reason") == "Не хватает идентификаторов должника"
+        ):
+            results.append(
+                {
+                    "case_id": case.id,
+                    "status": "blocked",
+                    "reason": preview.get("reason"),
+                    "eligible_at": None,
+                    "payload": None,
+                    "snapshot": _case_snapshot(case),
+                }
+            )
+            continue
 
         if preview["bucket"] != "eligible_now" and not force:
             results.append(
@@ -279,6 +649,7 @@ def execute_batch_action(
                     "reason": preview.get("reason"),
                     "eligible_at": preview.get("eligible_at"),
                     "payload": None,
+                    "snapshot": _case_snapshot(case),
                 }
             )
             continue
@@ -298,6 +669,7 @@ def execute_batch_action(
                     "reason": None,
                     "eligible_at": None,
                     "payload": payload if isinstance(payload, dict) else None,
+                    "snapshot": _case_snapshot(case),
                 }
             )
         except Exception as exc:
@@ -308,10 +680,12 @@ def execute_batch_action(
                     "reason": str(exc),
                     "eligible_at": None,
                     "payload": None,
+                    "snapshot": _case_snapshot(case),
                 }
             )
 
     summary_counter = Counter(item["status"] for item in results)
+    guardrails = _build_guardrails(cases, results)
 
     return {
         "ok": True,
@@ -320,4 +694,9 @@ def execute_batch_action(
         "queued": executed_count,
         "results": results,
         "summary": dict(summary_counter),
+        "guardrails": {
+            **guardrails,
+            "force_used": bool(force),
+            "executed_cases": executed_count,
+        },
     }

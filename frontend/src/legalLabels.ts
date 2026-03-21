@@ -82,6 +82,19 @@ export const EXECUTION_STATUS_LABELS: Record<string, string> = {
   skipped: "Пропущено",
 };
 
+export const ROUTING_STATUS_LABELS: Record<string, string> = {
+  ready: "Готово",
+  waiting: "Ожидание",
+  blocked: "Заблокировано",
+  idle: "Вне активного маршрута",
+  eligible: "Доступно к исполнению",
+  in_progress: "В работе",
+  active_collection: "Активное взыскание",
+  court_lane: "Судебный трек",
+  enforcement_lane: "Исполнительный трек",
+  general: "Общий поток",
+};
+
 export const SMART_LEVEL_LABELS: Record<string, string> = {
   ready: "Готово",
   partial: "Частично готово",
@@ -129,6 +142,10 @@ export function formatActionCode(code?: string, fallback = "—") {
 
 export function formatExecutionStatus(status?: string, fallback = "—") {
   return EXECUTION_STATUS_LABELS[status || ""] || status || fallback;
+}
+
+export function formatRoutingStatus(status?: string, fallback = "—") {
+  return ROUTING_STATUS_LABELS[status || ""] || status || fallback;
 }
 
 export function formatSmartLevel(level?: string, fallback = "—") {

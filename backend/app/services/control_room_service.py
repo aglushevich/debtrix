@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from collections import Counter
+from datetime import date
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -10,13 +11,15 @@ from backend.app.models.batch_job import BatchJob
 from backend.app.models.case import Case
 from backend.app.models.debtor_profile import DebtorProfile
 from backend.app.services.case_dashboard_service import build_case_dashboard
+from backend.app.services.focus_queue_service import get_control_room_focus_queues
 from backend.app.services.portfolio_routing_service import build_portfolio_routing
+from backend.app.services.priority_engine_service import build_case_priority_snapshot
 from backend.app.services.tenant_query_service import filter_cases_by_tenant
 from backend.app.services.waiting_bucket_service import list_waiting_buckets
 
 
 def _status_value(value: Any) -> str:
-    return getattr(value, "value", value) if value is not None else ""
+    return str(getattr(value, "value", value) or "").strip()
 
 
 def _amount_to_float(value: Any) -> float:
@@ -70,61 +73,35 @@ def _blocked_reason_flags(case: Case, debtor_profile: DebtorProfile | None) -> l
 
 
 def _status_bucket(status: str) -> str:
-    if status in {"closed"}:
+    if status == "closed":
         return "closed"
-    if status in {"court"}:
+    if status == "court":
         return "court"
     if status in {"fssp", "enforcement"}:
         return "fssp"
-    if status in {"pretrial"}:
+    if status == "pretrial":
         return "pretrial"
-    if status in {"overdue"}:
+    if status == "overdue":
         return "overdue"
     return "draft"
 
 
-def _risk_score(case: Case, debtor_profile: DebtorProfile | None) -> int:
-    amount = _amount_to_float(case.principal_amount)
-    status = _status_value(case.status)
-    blocked_flags = _blocked_reason_flags(case, debtor_profile)
-
-    score = 0
-
-    if status == "pretrial":
-        score += 35
-    elif status == "overdue":
-        score += 25
-    elif status == "court":
-        score += 45
-    elif status in {"fssp", "enforcement"}:
-        score += 30
-    elif status == "draft":
-        score += 5
-
-    if amount >= 1_000_000:
-        score += 35
-    elif amount >= 500_000:
-        score += 25
-    elif amount >= 100_000:
-        score += 15
-    elif amount > 0:
-        score += 8
-
-    if _is_overdue(case):
-        score += 10
-
-    if blocked_flags:
-        score += 12
-
-    return min(score, 100)
+def _route_lane_from_status(status: str) -> str:
+    if status == "court":
+        return "court_lane"
+    if status in {"fssp", "enforcement"}:
+        return "enforcement_lane"
+    if status == "closed":
+        return "closed_lane"
+    return "soft_lane"
 
 
 def _risk_level(score: int) -> str:
-    if score >= 75:
+    if score >= 85:
         return "critical"
-    if score >= 50:
+    if score >= 65:
         return "high"
-    if score >= 25:
+    if score >= 40:
         return "medium"
     return "low"
 
@@ -154,6 +131,143 @@ def _load_cases_with_profiles(
         profiles_map = {item.case_id: item for item in profiles}
 
     return cases, profiles_map
+
+
+def _build_routing_map(routing: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    buckets = dict(routing.get("buckets") or {})
+    result: dict[int, dict[str, Any]] = {}
+
+    for bucket_key in ["ready", "waiting", "blocked", "idle"]:
+        for row in buckets.get(bucket_key) or []:
+            case_id = row.get("case_id")
+            if isinstance(case_id, int):
+                result[case_id] = row
+
+    return result
+
+
+def _merge_signals(*groups: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+
+    for group in groups:
+        for item in group:
+            value = str(item or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+
+    return result
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except Exception:
+        return 0
+
+
+def _safe_percent(value: float) -> int:
+    return max(0, min(100, int(round(value))))
+
+
+def _build_priority_mix(priority_items: list[dict[str, Any]]) -> dict[str, int]:
+    mix = {
+        "low": 0,
+        "medium": 0,
+        "high": 0,
+        "critical": 0,
+    }
+
+    for item in priority_items:
+        band = str(item.get("priority_band") or "").strip().lower()
+        if band in mix:
+            mix[band] += 1
+
+    return mix
+
+
+def _build_pressure_metrics(
+    *,
+    priority_items: list[dict[str, Any]],
+    routing: dict[str, Any],
+) -> dict[str, int]:
+    total_cases = max(len(priority_items), 1)
+    routing_summary = dict(routing.get("summary") or {})
+
+    ready_cases = _safe_int(routing_summary.get("ready"))
+    waiting_cases = _safe_int(routing_summary.get("waiting"))
+    blocked_cases = _safe_int(routing_summary.get("blocked"))
+
+    critical_cases = 0
+    high_cases = 0
+    blocked_high_risk_cases = 0
+    waiting_high_priority_cases = 0
+    ready_high_priority_cases = 0
+
+    for item in priority_items:
+        band = str(item.get("priority_band") or "").strip().lower()
+        is_blocked = bool(item.get("is_blocked"))
+        is_waiting = bool(item.get("is_waiting"))
+        is_ready_now = bool(item.get("is_ready_now"))
+
+        if band == "critical":
+            critical_cases += 1
+        if band in {"high", "critical"}:
+            high_cases += 1
+        if is_blocked and band in {"high", "critical"}:
+            blocked_high_risk_cases += 1
+        if is_waiting and band in {"high", "critical"}:
+            waiting_high_priority_cases += 1
+        if is_ready_now and band in {"high", "critical"}:
+            ready_high_priority_cases += 1
+
+    ready_pressure = (
+        ready_cases * 8
+        + ready_high_priority_cases * 12
+        + critical_cases * 6
+    )
+    waiting_pressure = (
+        waiting_cases * 8
+        + waiting_high_priority_cases * 12
+    )
+    blocked_pressure = (
+        blocked_cases * 10
+        + blocked_high_risk_cases * 14
+    )
+
+    ready_pressure_score = _safe_percent((ready_pressure / total_cases) * 4)
+    waiting_pressure_score = _safe_percent((waiting_pressure / total_cases) * 4)
+    blocked_pressure_score = _safe_percent((blocked_pressure / total_cases) * 4)
+
+    return {
+        "ready_pressure": ready_pressure_score,
+        "waiting_pressure": waiting_pressure_score,
+        "blocked_pressure": blocked_pressure_score,
+    }
+
+
+def _build_portfolio_health_score(
+    *,
+    avg_priority_score: float,
+    blocked_pressure: int,
+    waiting_pressure: int,
+    ready_pressure: int,
+    critical_cases: int,
+    total_cases: int,
+) -> int:
+    if total_cases <= 0:
+        return 100
+
+    critical_penalty = (critical_cases / total_cases) * 35
+    blocked_penalty = blocked_pressure * 0.35
+    waiting_penalty = waiting_pressure * 0.20
+    avg_priority_penalty = avg_priority_score * 0.30
+    ready_relief = ready_pressure * 0.15
+
+    score = 100 - critical_penalty - blocked_penalty - waiting_penalty - avg_priority_penalty + ready_relief
+    return _safe_percent(score)
 
 
 def get_control_room_summary(
@@ -234,13 +348,55 @@ def get_control_room_priority_cases(
         include_archived=include_archived,
     )
 
+    routing = build_portfolio_routing(
+        db,
+        tenant_id=tenant_id,
+        cases=cases,
+    )
+    routing_map = _build_routing_map(routing)
+
     items: list[dict[str, Any]] = []
 
     for case in cases:
         profile = profiles_map.get(case.id)
-        risk_score = _risk_score(case, profile)
+        routing_row = routing_map.get(case.id) or {}
+
         blocked_flags = _blocked_reason_flags(case, profile)
+        routing_status = str(routing_row.get("routing_status") or "idle")
+        route_lane = str(
+            routing_row.get("route_lane") or _route_lane_from_status(_status_value(case.status))
+        )
+        waiting_reason = routing_row.get("waiting_reason")
+        waiting_eligible_at = routing_row.get("waiting_eligible_at")
+        routing_hint = routing_row.get("routing_hint")
+
+        dashboard = build_case_dashboard(db, case.id)
+        priority = build_case_priority_snapshot(
+            case=case,
+            dashboard=dashboard,
+            routing_row=routing_row,
+            blocked_reasons=blocked_flags,
+        )
+
         inn, ogrn = _extract_debtor_identifiers(case, profile)
+
+        blocked_reasons = _merge_signals(
+            list(priority.get("decision_blockers") or []),
+            [str(routing_hint)] if routing_status == "blocked" and routing_hint else [],
+        )
+
+        signals = _merge_signals(
+            list(priority.get("decision_signals") or []),
+            [str(waiting_reason)] if waiting_reason else [],
+            ["overdue_now"] if _is_overdue(case) else [],
+            ["high_amount"] if _amount_to_float(case.principal_amount) >= 500_000 else [],
+        )
+
+        is_waiting = bool(priority.get("waiting"))
+        is_blocked = bool(priority.get("blocked"))
+        is_court_lane = route_lane == "court_lane"
+        is_enforcement_lane = route_lane == "enforcement_lane"
+        is_ready_now = bool(priority.get("ready_now"))
 
         items.append(
             {
@@ -249,12 +405,37 @@ def get_control_room_priority_cases(
                 "status": _status_value(case.status),
                 "contract_type": _status_value(case.contract_type),
                 "debtor_type": _status_value(case.debtor_type),
-                "principal_amount": str(case.principal_amount) if case.principal_amount is not None else None,
+                "principal_amount": (
+                    str(case.principal_amount) if case.principal_amount is not None else None
+                ),
                 "due_date": case.due_date.isoformat() if case.due_date else None,
-                "risk_score": risk_score,
-                "risk_level": _risk_level(risk_score),
-                "blocked": len(blocked_flags) > 0,
-                "blocked_reasons": blocked_flags,
+                "risk_score": _safe_int(priority.get("priority_score")),
+                "risk_level": str(priority.get("priority_band") or "low"),
+                "priority_score": _safe_int(priority.get("priority_score")),
+                "priority_band": str(priority.get("priority_band") or "low"),
+                "priority_band_label": priority.get("priority_band_label"),
+                "priority_reasons": list(priority.get("priority_reasons") or []),
+                "operator_focus": priority.get("operator_focus"),
+                "decision_positives": list(priority.get("decision_positives") or []),
+                "decision_blockers": list(priority.get("decision_blockers") or []),
+                "decision_signals": list(priority.get("decision_signals") or []),
+                "signals": signals,
+                "routing_bucket": (
+                    route_lane if route_lane in {"court_lane", "enforcement_lane"} else routing_status
+                ),
+                "routing_status": routing_status,
+                "routing_hint": routing_hint,
+                "route_lane": route_lane,
+                "waiting_reason": waiting_reason,
+                "waiting_eligible_at": waiting_eligible_at,
+                "recommended_action": priority.get("operator_focus"),
+                "blocked": is_blocked,
+                "blocked_reasons": blocked_reasons,
+                "is_blocked": is_blocked,
+                "is_waiting": is_waiting,
+                "is_ready_now": is_ready_now,
+                "is_court_lane": is_court_lane,
+                "is_enforcement_lane": is_enforcement_lane,
                 "inn": inn,
                 "ogrn": ogrn,
                 "is_archived": bool(getattr(case, "is_archived", False)),
@@ -263,7 +444,7 @@ def get_control_room_priority_cases(
 
     items.sort(
         key=lambda item: (
-            -int(item["risk_score"]),
+            -_safe_int(item["priority_score"]),
             -_amount_to_float(item.get("principal_amount")),
             item["case_id"],
         )
@@ -289,7 +470,48 @@ def get_control_room_waiting_preview(
         step_code=None,
         limit=limit,
     )
-    return result
+
+    items = list(result.get("items") or [])
+    case_ids = [int(item["case_id"]) for item in items if item.get("case_id")]
+
+    case_map: dict[int, Case] = {}
+    if case_ids:
+        rows = (
+            db.query(Case)
+            .filter(
+                Case.tenant_id == tenant_id,
+                Case.id.in_(case_ids),
+            )
+            .all()
+        )
+        case_map = {row.id: row for row in rows}
+
+    enriched_items: list[dict[str, Any]] = []
+    for item in items:
+        case_id = int(item["case_id"])
+        case = case_map.get(case_id)
+
+        enriched_items.append(
+            {
+                **item,
+                "reason": item.get("reason_text") or item.get("reason"),
+                "debtor_name": case.debtor_name if case else None,
+                "contract_type": _status_value(case.contract_type) if case else None,
+                "status": _status_value(case.status) if case else None,
+                "principal_amount": (
+                    str(case.principal_amount)
+                    if case and case.principal_amount is not None
+                    else None
+                ),
+                "route_lane": _route_lane_from_status(_status_value(case.status)) if case else None,
+                "is_archived": bool(getattr(case, "is_archived", False)) if case else False,
+            }
+        )
+
+    return {
+        "items": enriched_items,
+        "count": len(enriched_items),
+    }
 
 
 def get_control_room_execution_console(
@@ -371,6 +593,72 @@ def get_control_room_execution_console(
     }
 
 
+def _build_intelligence_kpi(
+    priority_items: list[dict[str, Any]],
+    routing: dict[str, Any],
+) -> dict[str, Any]:
+    lane_summary = dict(routing.get("lane_summary") or {})
+    counter = Counter()
+
+    total_cases = len(priority_items)
+    total_priority_score = 0
+
+    for item in priority_items:
+        priority_score = _safe_int(item.get("priority_score"))
+        total_priority_score += priority_score
+
+        if item.get("priority_band") in {"high", "critical"}:
+            counter["high_risk_cases"] += 1
+        if item.get("priority_band") == "critical":
+            counter["critical_cases"] += 1
+        if item.get("blocked") and item.get("priority_band") in {"high", "critical"}:
+            counter["blocked_high_risk_cases"] += 1
+        if item.get("is_ready_now"):
+            counter["ready_now_cases"] += 1
+        if item.get("is_waiting"):
+            counter["waiting_cases"] += 1
+        if item.get("is_blocked"):
+            counter["blocked_cases"] += 1
+
+    avg_priority_score = round(total_priority_score / total_cases, 1) if total_cases else 0.0
+    avg_risk_score = avg_priority_score
+
+    priority_mix = _build_priority_mix(priority_items)
+
+    pressure = _build_pressure_metrics(
+        priority_items=priority_items,
+        routing=routing,
+    )
+
+    portfolio_health_score = _build_portfolio_health_score(
+        avg_priority_score=avg_priority_score,
+        blocked_pressure=pressure["blocked_pressure"],
+        waiting_pressure=pressure["waiting_pressure"],
+        ready_pressure=pressure["ready_pressure"],
+        critical_cases=counter["critical_cases"],
+        total_cases=total_cases,
+    )
+
+    return {
+        "high_risk_cases": counter["high_risk_cases"],
+        "critical_cases": counter["critical_cases"],
+        "blocked_high_risk_cases": counter["blocked_high_risk_cases"],
+        "ready_now_cases": counter["ready_now_cases"],
+        "waiting_cases": counter["waiting_cases"],
+        "blocked_cases": counter["blocked_cases"],
+        "soft_lane_cases": lane_summary.get("soft_lane", 0),
+        "court_lane_cases": lane_summary.get("court_lane", 0),
+        "enforcement_lane_cases": lane_summary.get("enforcement_lane", 0),
+        "avg_risk_score": avg_risk_score,
+        "avg_priority_score": avg_priority_score,
+        "priority_mix": priority_mix,
+        "ready_pressure": pressure["ready_pressure"],
+        "waiting_pressure": pressure["waiting_pressure"],
+        "blocked_pressure": pressure["blocked_pressure"],
+        "portfolio_health_score": portfolio_health_score,
+    }
+
+
 def get_control_room_dashboard(
     db: Session,
     *,
@@ -405,28 +693,29 @@ def get_control_room_dashboard(
         limit=20,
     )
 
-    priority_cases = get_control_room_priority_cases(
+    all_priority_cases = get_control_room_priority_cases(
         db,
         tenant_id=tenant_id,
-        limit=10,
+        limit=max(len(cases), 10),
         include_archived=include_archived,
     )
 
-    intelligence_kpi = {
-        "high_risk_cases": len(
-            [item for item in priority_cases["items"] if item["risk_level"] in {"high", "critical"}]
-        ),
-        "critical_cases": len(
-            [item for item in priority_cases["items"] if item["risk_level"] == "critical"]
-        ),
-        "blocked_high_risk_cases": len(
-            [
-                item
-                for item in priority_cases["items"]
-                if item["blocked"] and item["risk_level"] in {"high", "critical"}
-            ]
-        ),
+    priority_cases = {
+        "items": list(all_priority_cases["items"][:10]),
+        "total": all_priority_cases["total"],
     }
+
+    focus_queues = get_control_room_focus_queues(
+        db,
+        tenant_id=tenant_id,
+        include_archived=include_archived,
+        per_queue_limit=5,
+    )
+
+    intelligence_kpi = _build_intelligence_kpi(
+        all_priority_cases["items"],
+        routing,
+    )
 
     return {
         "summary": summary,
@@ -434,6 +723,7 @@ def get_control_room_dashboard(
         "waiting_preview": waiting_preview,
         "execution": execution,
         "priority_cases": priority_cases,
+        "focus_queues": focus_queues,
         "intelligence_kpi": intelligence_kpi,
     }
 

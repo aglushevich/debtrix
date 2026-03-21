@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getOrganizationStarterKit } from "./api";
+import { formatCaseStatus } from "./legalLabels";
 
 type Props = {
   caseId: number | null;
@@ -12,7 +13,23 @@ function readinessLabel(level?: string) {
     partial: "Частично готово",
     missing: "Недостаточно данных",
   };
+
   return map[level || ""] || level || "—";
+}
+
+function formatMoney(value: any): string {
+  const num = Number(String(value ?? 0).replace(",", "."));
+  if (!Number.isFinite(num)) return String(value ?? "—");
+
+  return num.toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function safeStatusClass(status?: string, isCurrent?: boolean) {
+  if (isCurrent) return "status-badge status-ready";
+  return `status-badge status-${String(status || "draft")}`;
 }
 
 export default function OrganizationPanel({ caseId, onOpenCase }: Props) {
@@ -30,9 +47,9 @@ export default function OrganizationPanel({ caseId, onOpenCase }: Props) {
       setLoading(true);
       setError("");
       const result = await getOrganizationStarterKit(caseId);
-      setData(result);
+      setData(result || null);
     } catch (e: any) {
-      setError(e?.message || "Не удалось загрузить organization starter kit");
+      setError(e?.message || "Не удалось загрузить organization starter kit.");
       setData(null);
     } finally {
       setLoading(false);
@@ -40,34 +57,59 @@ export default function OrganizationPanel({ caseId, onOpenCase }: Props) {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, [caseId]);
+
+  const missingFields = useMemo(() => {
+    return Array.isArray(data?.readiness?.missing_fields) ? data.readiness.missing_fields : [];
+  }, [data]);
 
   if (!caseId) return null;
 
   return (
-    <section className="panel">
-      <div className="panel-title">Organization Starter Kit</div>
+    <section className="panel case-embedded-panel">
+      <div className="section-header">
+        <div>
+          <div className="section-eyebrow">Organization layer</div>
+          <div className="panel-title" style={{ marginBottom: 6 }}>
+            Organization Starter Kit
+          </div>
+          <div className="muted">
+            Готовность профиля организации, readiness checks и связанные кейсы по должнику.
+          </div>
+        </div>
+
+        <div className="action-list">
+          <button className="secondary-btn" onClick={() => void load()} disabled={loading}>
+            {loading ? "Обновляем…" : "Обновить"}
+          </button>
+        </div>
+      </div>
 
       {loading && <div className="empty-box">Загрузка starter kit…</div>}
       {!loading && error && <div className="empty-box">{error}</div>}
 
       {!loading && !error && data && (
         <>
-          <div className="debtor-cases-summary" style={{ marginBottom: 16 }}>
-            <div className="summary-card">
-              <span className="label">Готовность</span>
-              <strong>{readinessLabel(data?.readiness?.level)}</strong>
+          <div className="ops-grid ops-grid-compact" style={{ marginBottom: 16 }}>
+            <div className="ops-card ops-card-accent">
+              <div className="ops-card-title">Готовность</div>
+              <div className="ops-card-value">{readinessLabel(data?.readiness?.level)}</div>
             </div>
 
-            <div className="summary-card">
-              <span className="label">Completion</span>
-              <strong>{data?.summary?.completion_percent ?? "—"}%</strong>
+            <div className="ops-card">
+              <div className="ops-card-title">Completion</div>
+              <div className="ops-card-value">{data?.summary?.completion_percent ?? "—"}%</div>
             </div>
 
-            <div className="summary-card">
-              <span className="label">Readiness score</span>
-              <strong>{data?.summary?.readiness_score ?? "—"}</strong>
+            <div className="ops-card">
+              <div className="ops-card-title">Readiness score</div>
+              <div className="ops-card-value">{data?.summary?.readiness_score ?? "—"}</div>
+            </div>
+
+            <div className="ops-card">
+              <div className="ops-card-title">Missing fields</div>
+              <div className="ops-card-value">{missingFields.length}</div>
             </div>
           </div>
 
@@ -102,14 +144,50 @@ export default function OrganizationPanel({ caseId, onOpenCase }: Props) {
               <strong>{data?.organization?.status || "—"}</strong>
             </div>
 
+            <div className="info-item">
+              <span className="label">Регистрация</span>
+              <strong>{data?.organization?.registration_date || "—"}</strong>
+            </div>
+
+            <div className="info-item">
+              <span className="label">ОКВЭД</span>
+              <strong>{data?.organization?.okved_main || "—"}</strong>
+            </div>
+
             <div className="info-item info-item-wide">
               <span className="label">Адрес</span>
               <strong>{data?.organization?.address || "—"}</strong>
             </div>
+
+            <div className="info-item">
+              <span className="label">Источник</span>
+              <strong>{data?.organization?.source || "—"}</strong>
+            </div>
+
+            <div className="info-item">
+              <span className="label">Активна</span>
+              <strong>{data?.organization?.is_active ? "Да" : "Нет / неизвестно"}</strong>
+            </div>
           </div>
 
-          <div className="dashboard-grid">
-            <div className="panel">
+          {!!missingFields.length && (
+            <div className="panel panel-nested" style={{ marginBottom: 16 }}>
+              <div className="panel-title" style={{ marginBottom: 10 }}>
+                Недостающие поля
+              </div>
+
+              <div className="action-list" style={{ flexWrap: "wrap" }}>
+                {missingFields.map((field: string, index: number) => (
+                  <span key={`${field}-${index}`} className="status-badge status-not-ready">
+                    {field}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="dashboard-grid dashboard-grid-secondary">
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Проверки готовности</div>
 
               {data?.readiness?.checks?.length ? (
@@ -152,7 +230,7 @@ export default function OrganizationPanel({ caseId, onOpenCase }: Props) {
               )}
             </div>
 
-            <div className="panel">
+            <div className="panel panel-nested" style={{ marginBottom: 0 }}>
               <div className="panel-title">Связанные дела</div>
 
               {data?.linked_cases?.length ? (
@@ -165,17 +243,19 @@ export default function OrganizationPanel({ caseId, onOpenCase }: Props) {
                     >
                       <div className="related-case-top">
                         <strong>Дело #{item.case_id}</strong>
-                        <span className="status-badge status-ready">
-                          {item.status || "—"}
+                        <span className={safeStatusClass(item.status, item.is_current)}>
+                          {formatCaseStatus(item.status)}
                         </span>
                       </div>
 
                       <div className="muted">
-                        {item.contract_type || "—"} · {item.principal_amount || "—"} ₽
+                        {item.contract_type || "—"} ·{" "}
+                        {item.principal_amount != null
+                          ? `${formatMoney(item.principal_amount)} ₽`
+                          : "—"}
                       </div>
-                      <div className="muted small">
-                        {item.debtor_name || "—"}
-                      </div>
+
+                      <div className="muted small">{item.debtor_name || "—"}</div>
                     </button>
                   ))}
                 </div>

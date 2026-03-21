@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getExecutionHistory } from "./api";
 import { formatActionCode, formatExecutionStatus } from "./legalLabels";
 
@@ -24,7 +24,7 @@ function statusBadgeClass(status?: string) {
     running: "status-pretrial",
     queued: "status-draft",
     pending: "status-draft",
-    waiting: "status-draft",
+    waiting: "status-waiting",
     blocked: "status-not-ready",
     already_processed: "status-pretrial",
     not_applicable: "status-not-ready",
@@ -34,6 +34,28 @@ function statusBadgeClass(status?: string) {
   };
 
   return map[status || ""] || "status-draft";
+}
+
+function buildStats(items: any[]) {
+  const summary = {
+    total: items.length,
+    success: 0,
+    running: 0,
+    waiting: 0,
+    blocked: 0,
+    error: 0,
+  };
+
+  for (const item of items) {
+    const status = String(item?.status || "");
+    if (status === "success" || status === "completed") summary.success += 1;
+    else if (status === "running" || status === "queued" || status === "pending") summary.running += 1;
+    else if (status === "waiting") summary.waiting += 1;
+    else if (status === "blocked" || status === "not_applicable") summary.blocked += 1;
+    else if (status === "failed" || status === "error") summary.error += 1;
+  }
+
+  return summary;
 }
 
 export default function ExecutionHistoryPanel({ caseId }: Props) {
@@ -56,11 +78,13 @@ export default function ExecutionHistoryPanel({ caseId }: Props) {
   }
 
   useEffect(() => {
-    load();
+    void load();
   }, [caseId]);
 
+  const stats = useMemo(() => buildStats(items), [items]);
+
   return (
-    <section className="panel">
+    <section className="panel case-embedded-panel">
       <div className="section-header">
         <div>
           <div className="section-eyebrow">Case execution log</div>
@@ -71,7 +95,39 @@ export default function ExecutionHistoryPanel({ caseId }: Props) {
             Журнал выполненных, запущенных, заблокированных и ожидающих действий по делу.
           </div>
         </div>
+
+        <div className="action-list">
+          <button className="secondary-btn" onClick={() => void load()} disabled={loading}>
+            {loading ? "Обновляем…" : "Обновить"}
+          </button>
+        </div>
       </div>
+
+      {!loading && !error && items.length > 0 && (
+        <div className="ops-grid ops-grid-compact" style={{ marginBottom: 16 }}>
+          <div className="ops-card ops-card-accent">
+            <div className="ops-card-title">Всего записей</div>
+            <div className="ops-card-value">{stats.total}</div>
+          </div>
+
+          <div className="ops-card">
+            <div className="ops-card-title">Успешно</div>
+            <div className="ops-card-value">{stats.success}</div>
+          </div>
+
+          <div className="ops-card">
+            <div className="ops-card-title">В процессе</div>
+            <div className="ops-card-value">{stats.running}</div>
+          </div>
+
+          <div className="ops-card">
+            <div className="ops-card-title">Waiting / blocked / error</div>
+            <div className="ops-card-value">
+              {stats.waiting + stats.blocked + stats.error}
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading && (
         <div className="empty-box" style={{ marginTop: 14 }}>
@@ -94,7 +150,7 @@ export default function ExecutionHistoryPanel({ caseId }: Props) {
       {!loading && !error && items.length > 0 && (
         <div className="timeline-list" style={{ marginTop: 14 }}>
           {items.map((item) => (
-            <div key={item.id} className="timeline-item">
+            <div key={item.id} className="timeline-item execution-history-item">
               <div className="timeline-item-top">
                 <div>
                   <strong>{formatActionCode(item.action_code)}</strong>
@@ -126,6 +182,21 @@ export default function ExecutionHistoryPanel({ caseId }: Props) {
                 <div className="info-item">
                   <span className="label">Технический код</span>
                   <strong>{item.action_code || "—"}</strong>
+                </div>
+
+                <div className="info-item">
+                  <span className="label">Создано</span>
+                  <strong>{formatDateTime(item.created_at)}</strong>
+                </div>
+
+                <div className="info-item">
+                  <span className="label">Eligible at</span>
+                  <strong>{formatDateTime(item.eligible_at)}</strong>
+                </div>
+
+                <div className="info-item info-item-wide">
+                  <span className="label">Комментарий</span>
+                  <strong>{item.reason || "Без дополнительного комментария"}</strong>
                 </div>
               </div>
             </div>

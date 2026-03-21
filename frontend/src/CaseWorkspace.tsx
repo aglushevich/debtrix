@@ -18,6 +18,8 @@ import {
   formatParticipantRole,
   formatStageStatus,
 } from "./legalLabels";
+import PlaybookTimelinePanel from "./PlaybookTimelinePanel";
+import DecisionExplainPanel from "./DecisionExplainPanel";
 
 type Props = {
   selectedCase: number;
@@ -73,18 +75,14 @@ type Props = {
 };
 
 function getSmartBlock(dashboard: any) {
-  return (
-    dashboard?.case?.meta?.smart ||
-    dashboard?.case?.smart ||
-    dashboard?.smart ||
-    null
-  );
+  return dashboard?.case?.meta?.smart || dashboard?.case?.smart || dashboard?.smart || null;
 }
 
 function readinessLabel(level?: string) {
   if (level === "ready") return "Готово";
   if (level === "partial") return "Частично готово";
   if (level === "waiting") return "Ожидает";
+  if (level === "blocked") return "Заблокировано";
   return "Черновик";
 }
 
@@ -92,7 +90,25 @@ function readinessClass(level?: string) {
   if (level === "ready") return "is-ready";
   if (level === "partial") return "is-partial";
   if (level === "waiting") return "is-waiting";
+  if (level === "blocked") return "is-blocked";
   return "is-draft";
+}
+
+function asArray<T = any>(value: any): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function formatMoney(value: any): string {
+  const num = Number(String(value ?? 0).replace(",", "."));
+  if (!Number.isFinite(num)) return "0.00";
+  return num.toLocaleString("ru-RU", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function safeStatusClass(status?: string | null) {
+  return `status-badge status-${String(status || "draft")}`;
 }
 
 export default function CaseWorkspace({
@@ -128,13 +144,18 @@ export default function CaseWorkspace({
   onDownloadDocument,
 }: Props) {
   const smart = getSmartBlock(dashboard);
+
   const smartScore = Number(smart?.readiness_score || 0);
   const smartLevel = String(smart?.readiness_level || "draft");
-  const smartWarnings = Array.isArray(smart?.warnings) ? smart.warnings : [];
-  const smartSignals = Array.isArray(smart?.signals) ? smart.signals : [];
-  const smartDuplicates = Array.isArray(smart?.duplicates) ? smart.duplicates : [];
+  const smartWarnings = asArray<string>(smart?.warnings);
+  const smartSignals = asArray<string>(smart?.signals);
+  const smartDuplicates = asArray<any>(smart?.duplicates);
   const smartOrganization = smart?.organization || null;
   const smartCompleteness = smart?.completeness || null;
+
+  const stageFlags = Object.entries(dashboard?.stage?.flags || {});
+  const safeParticipants = asArray<any>(participants);
+  const safeRelatedCases = asArray<any>(relatedCases);
 
   if (loadingCase) {
     return (
@@ -147,7 +168,21 @@ export default function CaseWorkspace({
     );
   }
 
-  if (!dashboard && !error) {
+  if (error && !dashboard) {
+    return (
+      <div className="case-workspace">
+        <div className="case-main">
+          <div className="panel error-panel">
+            <div className="panel-title">Ошибка загрузки дела</div>
+            <div>{error}</div>
+          </div>
+        </div>
+        <IntelligencePanel dashboard={dashboard} />
+      </div>
+    );
+  }
+
+  if (!dashboard) {
     return (
       <div className="case-workspace">
         <div className="case-main">
@@ -176,7 +211,7 @@ export default function CaseWorkspace({
                   Smart readiness по делу
                 </div>
                 <div className="muted">
-                  Быстрая оценка качества карточки, сигналов риска и полноты данных.
+                  Быстрая оценка качества карточки, сигналов риска, дубликатов и полноты данных.
                 </div>
               </div>
             </div>
@@ -186,15 +221,18 @@ export default function CaseWorkspace({
                 <div className="smart-case-hero-main">
                   <div className="smart-case-hero-label">Readiness score</div>
                   <div className="smart-case-hero-value">{smartScore}</div>
+
                   <div className={`smart-case-hero-badge ${readinessClass(smartLevel)}`}>
                     {readinessLabel(smartLevel)}
                   </div>
+
                   <div className="smart-case-hero-progress">
                     <div
                       className={`smart-case-hero-progress-bar ${readinessClass(smartLevel)}`}
                       style={{ width: `${Math.max(6, Math.min(smartScore, 100))}%` }}
                     />
                   </div>
+
                   <div className="smart-case-hero-caption">
                     {smartLevel === "ready" &&
                       "Карточка заполнена достаточно хорошо для уверенной дальнейшей работы."}
@@ -202,6 +240,8 @@ export default function CaseWorkspace({
                       "Карточка рабочая, но есть пробелы, которые желательно закрыть."}
                     {smartLevel === "waiting" &&
                       "Дело пока не готово к активному движению и требует уточнений."}
+                    {smartLevel === "blocked" &&
+                      "По делу есть ограничения, которые мешают нормальной маршрутизации."}
                     {smartLevel === "draft" &&
                       "Это всё ещё черновик: нужны дополнительные данные для нормальной маршрутизации."}
                   </div>
@@ -236,14 +276,17 @@ export default function CaseWorkspace({
                     <span>ИНН</span>
                     <strong>{smartCompleteness.has_inn ? "Есть" : "Нет"}</strong>
                   </div>
+
                   <div className="smart-case-check-card">
                     <span>ОГРН</span>
                     <strong>{smartCompleteness.has_ogrn ? "Есть" : "Нет"}</strong>
                   </div>
+
                   <div className="smart-case-check-card">
                     <span>Срок оплаты</span>
                     <strong>{smartCompleteness.has_due_date ? "Есть" : "Нет"}</strong>
                   </div>
+
                   <div className="smart-case-check-card">
                     <span>Сумма</span>
                     <strong>{smartCompleteness.has_amount ? "Есть" : "Нет"}</strong>
@@ -304,12 +347,28 @@ export default function CaseWorkspace({
         <section className="case-section-block">
           <div className="case-section-head">
             <div>
+              <div className="section-eyebrow">Playbook flow</div>
+              <div className="panel-title" style={{ marginBottom: 6 }}>
+                Оркестрация движения дела
+              </div>
+              <div className="muted">
+                Текущий playbook взыскания, шаги процесса, waiting-окна и точка принятия решения.
+              </div>
+            </div>
+          </div>
+
+          <PlaybookTimelinePanel dashboard={dashboard} recommendation={recommendation} />
+        </section>
+
+        <section className="case-section-block">
+          <div className="case-section-head">
+            <div>
               <div className="section-eyebrow">Decision zone</div>
               <div className="panel-title" style={{ marginBottom: 6 }}>
                 Текущее решение по делу
               </div>
               <div className="muted">
-                Статус, стадия взыскания и рекомендуемый следующий шаг.
+                Статус, стадия взыскания, следующий шаг и explainability в одной зоне.
               </div>
             </div>
           </div>
@@ -335,15 +394,13 @@ export default function CaseWorkspace({
                 <div className="info-item">
                   <span className="label">Тип договора</span>
                   <strong>
-                    {dashboard?.case?.contract_type_title ||
-                      dashboard?.case?.contract_type ||
-                      "—"}
+                    {dashboard?.case?.contract_type_title || dashboard?.case?.contract_type || "—"}
                   </strong>
                 </div>
 
                 <div className="info-item">
                   <span className="label">Сумма задолженности</span>
-                  <strong>{dashboard?.case?.principal_amount || "—"} ₽</strong>
+                  <strong>{formatMoney(dashboard?.case?.principal_amount)} ₽</strong>
                 </div>
 
                 <div className="info-item">
@@ -354,8 +411,7 @@ export default function CaseWorkspace({
                 <div className="info-item">
                   <span className="label">Статус дела</span>
                   <strong>
-                    {dashboard?.case?.status_title ||
-                      formatCaseStatus(dashboard?.case?.status)}
+                    {dashboard?.case?.status_title || formatCaseStatus(dashboard?.case?.status)}
                   </strong>
                 </div>
               </div>
@@ -367,9 +423,9 @@ export default function CaseWorkspace({
               {dashboard?.next_step ? (
                 <div className="next-step-box">
                   <div className="next-step-title">
-                    {dashboard.next_step.title_ru || dashboard.next_step.title}
+                    {dashboard?.next_step?.title_ru || dashboard?.next_step?.title || "—"}
                   </div>
-                  <div className="muted">Код действия: {dashboard.next_step.code}</div>
+                  <div className="muted">Код действия: {dashboard?.next_step?.code || "—"}</div>
                 </div>
               ) : (
                 <div className="empty-box">Доступные действия отсутствуют.</div>
@@ -378,16 +434,12 @@ export default function CaseWorkspace({
               <div className="stage-block">
                 <div className="label">Текущая стадия</div>
                 <div className="stage-title">
-                  {dashboard?.stage?.status_title ||
-                    formatStageStatus(dashboard?.stage?.status)}
+                  {dashboard?.stage?.status_title || formatStageStatus(dashboard?.stage?.status)}
                 </div>
 
                 <div className="flag-list">
-                  {Object.entries(dashboard?.stage?.flags || {}).map(([key, value]) => (
-                    <span
-                      key={key}
-                      className={`mini-badge ${value ? "ok" : "muted-badge"}`}
-                    >
+                  {stageFlags.map(([key, value]) => (
+                    <span key={key} className={`mini-badge ${value ? "ok" : "muted-badge"}`}>
                       {formatFlagLabel(key)}: {value ? "да" : "нет"}
                     </span>
                   ))}
@@ -399,12 +451,15 @@ export default function CaseWorkspace({
           <section className="dashboard-grid dashboard-grid-secondary">
             <div className="panel">
               <div className="panel-title">Рекомендация по взысканию</div>
+
               <div className="recommendation-box">
                 <div className="recommendation-title">{recommendation}</div>
                 <div className="muted">
                   Используйте это как основной следующий шаг по делу.
                 </div>
               </div>
+
+              <DecisionExplainPanel explain={dashboard?.decision_explain} />
             </div>
 
             <CaseActionsPanel
@@ -474,9 +529,7 @@ export default function CaseWorkspace({
                   </button>
                 </div>
 
-                {debtorMessage && (
-                  <div className="debtor-actions-message">{debtorMessage}</div>
-                )}
+                {debtorMessage && <div className="debtor-actions-message">{debtorMessage}</div>}
               </div>
 
               {displayedOrganization ? (
@@ -542,15 +595,13 @@ export default function CaseWorkspace({
               <div className="panel-title">Настройки soft stage</div>
 
               <div className="muted" style={{ marginBottom: 14 }}>
-                Эти сроки определяют внутреннюю политику кредитора до перехода к
-                досудебной претензии.
+                Эти сроки определяют внутреннюю политику кредитора до перехода к досудебной
+                претензии.
               </div>
 
               <div className="info-grid" style={{ marginBottom: 14 }}>
                 <div className="info-item">
-                  <span className="label">
-                    Первое уведомление после срока оплаты, дней
-                  </span>
+                  <span className="label">Первое уведомление после срока оплаты, дней</span>
                   <input
                     className="small-input"
                     type="number"
@@ -600,31 +651,23 @@ export default function CaseWorkspace({
                 <div className="info-item">
                   <span className="label">Базовая дата</span>
                   <strong>
-                    {dashboard?.policy_timing?.base_due_date ||
-                      dashboard?.case?.due_date ||
-                      "—"}
+                    {dashboard?.policy_timing?.base_due_date || dashboard?.case?.due_date || "—"}
                   </strong>
                 </div>
 
                 <div className="info-item">
                   <span className="label">Дата первого уведомления</span>
-                  <strong>
-                    {dashboard?.policy_timing?.payment_due_notice_eligible_at || "—"}
-                  </strong>
+                  <strong>{dashboard?.policy_timing?.payment_due_notice_eligible_at || "—"}</strong>
                 </div>
 
                 <div className="info-item">
                   <span className="label">Дата уведомления о задолженности</span>
-                  <strong>
-                    {dashboard?.policy_timing?.debt_notice_eligible_at || "—"}
-                  </strong>
+                  <strong>{dashboard?.policy_timing?.debt_notice_eligible_at || "—"}</strong>
                 </div>
 
                 <div className="info-item">
                   <span className="label">Дата досудебной претензии</span>
-                  <strong>
-                    {dashboard?.policy_timing?.pretension_eligible_at || "—"}
-                  </strong>
+                  <strong>{dashboard?.policy_timing?.pretension_eligible_at || "—"}</strong>
                 </div>
               </div>
 
@@ -650,25 +693,53 @@ export default function CaseWorkspace({
         <section className="case-section-block">
           <div className="case-section-head">
             <div>
-              <div className="section-eyebrow">Documents and integrations</div>
+              <div className="section-eyebrow">Recovery control</div>
               <div className="panel-title" style={{ marginBottom: 6 }}>
-                Документы, интеграции и внешние действия
+                Recovery и debtor-level обзор
               </div>
               <div className="muted">
-                Рабочая зона подготовки документов и взаимодействия с внешними провайдерами.
+                Финансовая часть кейса и общий контекст по должнику в одном рабочем слое.
               </div>
             </div>
           </div>
 
-          <CaseDocumentsPanel
-            selectedCase={selectedCase}
-            dashboard={dashboard}
-            onDownloadDocument={onDownloadDocument}
-          />
+          <section className="dashboard-grid dashboard-grid-secondary">
+            <RecoveryPanel caseId={selectedCase} />
+            <DebtorDashboardPanel debtorId={debtorId} onOpenCase={onOpenCase} />
+          </section>
+        </section>
+
+        <section className="case-section-block">
+          <div className="case-section-head">
+            <div>
+              <div className="section-eyebrow">Operations deck</div>
+              <div className="panel-title" style={{ marginBottom: 6 }}>
+                Операционная зона исполнения
+              </div>
+              <div className="muted">
+                Документы, интеграции, внешние действия и execution-log в едином рабочем слое.
+              </div>
+            </div>
+          </div>
+
+          <section className="case-ops-deck">
+            <div className="case-ops-deck-main">
+              <CaseDocumentsPanel
+                selectedCase={selectedCase}
+                dashboard={dashboard}
+                onDownloadDocument={onDownloadDocument}
+              />
+
+              <ExecutionHistoryPanel caseId={selectedCase} />
+            </div>
+
+            <div className="case-ops-deck-side">
+              <IntegrationPanel caseId={selectedCase} />
+              <ExternalActionsPanel caseId={selectedCase} />
+            </div>
+          </section>
 
           <OrganizationPanel caseId={selectedCase} onOpenCase={onOpenCase} />
-          <IntegrationPanel caseId={selectedCase} />
-          <ExternalActionsPanel caseId={selectedCase} />
         </section>
 
         <section className="case-section-block">
@@ -687,25 +758,21 @@ export default function CaseWorkspace({
           <section className="panel">
             <div className="panel-title">Участники дела</div>
 
-            {participants.length ? (
+            {safeParticipants.length ? (
               <div className="participants-list">
-                {participants.map((participant: any) => (
+                {safeParticipants.map((participant: any) => (
                   <div className="participant-card" key={participant.id}>
                     <div className="participant-card-top">
                       <div>
                         <div className="participant-role">
                           {formatParticipantRole(participant.role)}
                         </div>
-                        <div className="participant-name">
-                          {participant.party?.name || "—"}
-                        </div>
+                        <div className="participant-name">{participant.party?.name || "—"}</div>
                       </div>
 
                       <div className="participant-badges">
                         {participant.is_primary && (
-                          <span className="status-badge status-ready">
-                            Основной участник
-                          </span>
+                          <span className="status-badge status-ready">Основной участник</span>
                         )}
                       </div>
                     </div>
@@ -713,9 +780,7 @@ export default function CaseWorkspace({
                     <div className="participant-meta-grid">
                       <div className="info-item">
                         <span className="label">Тип участника</span>
-                        <strong>
-                          {formatDebtorType(participant.party?.debtor_type)}
-                        </strong>
+                        <strong>{formatDebtorType(participant.party?.debtor_type)}</strong>
                       </div>
 
                       <div className="info-item">
@@ -746,9 +811,10 @@ export default function CaseWorkspace({
             )}
           </section>
 
-          <DebtMapPanel caseId={selectedCase} onOpenCase={onOpenCase} />
-          <DebtorGraphPanel caseId={selectedCase} onOpenCase={onOpenCase} />
-          <DebtorDashboardPanel debtorId={debtorId} onOpenCase={onOpenCase} />
+          <section className="dashboard-grid dashboard-grid-secondary">
+            <DebtMapPanel caseId={selectedCase} onOpenCase={onOpenCase} />
+            <DebtorGraphPanel caseId={selectedCase} onOpenCase={onOpenCase} />
+          </section>
 
           <section className="panel">
             <div className="panel-title">Другие дела этого должника</div>
@@ -761,14 +827,14 @@ export default function CaseWorkspace({
                 </div>
                 <div className="summary-card">
                   <span className="label">Общая сумма задолженности</span>
-                  <strong>{relatedSummary.total_principal_amount || "0.00"} ₽</strong>
+                  <strong>{formatMoney(relatedSummary.total_principal_amount)} ₽</strong>
                 </div>
               </div>
             )}
 
             <div className="related-cases-list">
-              {relatedCases.length ? (
-                relatedCases.map((item: any) => (
+              {safeRelatedCases.length ? (
+                safeRelatedCases.map((item: any) => (
                   <button
                     key={item.case_id}
                     className={`related-case-card ${item.is_current ? "is-current" : ""}`}
@@ -776,7 +842,7 @@ export default function CaseWorkspace({
                   >
                     <div className="related-case-top">
                       <strong>Дело №{item.case_id}</strong>
-                      <span className={`status-badge status-${item.status}`}>
+                      <span className={safeStatusClass(item.status)}>
                         {item.status_title || formatCaseStatus(item.status)}
                       </span>
                     </div>
@@ -784,7 +850,7 @@ export default function CaseWorkspace({
                     <div className="muted">
                       {(item.contract_type_title || item.contract_type || "—") +
                         " · " +
-                        (item.principal_amount || "—") +
+                        formatMoney(item.principal_amount) +
                         " ₽"}
                     </div>
 
@@ -801,18 +867,14 @@ export default function CaseWorkspace({
         <section className="case-section-block">
           <div className="case-section-head">
             <div>
-              <div className="section-eyebrow">Recovery and history</div>
+              <div className="section-eyebrow">Timeline</div>
               <div className="panel-title" style={{ marginBottom: 6 }}>
-                Recovery, execution и история
+                Timeline жизни дела
               </div>
-              <div className="muted">
-                Финансовая часть, история исполнения и хронология жизни дела.
-              </div>
+              <div className="muted">Хронология ключевых событий внутри process engine.</div>
             </div>
           </div>
 
-          <RecoveryPanel caseId={selectedCase} />
-          <ExecutionHistoryPanel caseId={selectedCase} />
           <CaseTimelinePanel timeline={timeline} />
         </section>
       </div>

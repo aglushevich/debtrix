@@ -9,6 +9,32 @@ from backend.app.models import Case
 from backend.app.services.playbook_engine_service import evaluate_case_playbook
 
 
+def _status_value(value: Any) -> str:
+    return str(getattr(value, "value", value) or "").strip()
+
+
+def _route_lane(case: Case) -> str:
+    status = _status_value(case.status)
+
+    if status == "court":
+        return "court_lane"
+    if status in {"fssp", "enforcement"}:
+        return "enforcement_lane"
+    if status == "closed":
+        return "closed_lane"
+    return "soft_lane"
+
+
+def _route_lane_title(code: str) -> str:
+    titles = {
+        "soft_lane": "Soft lane",
+        "court_lane": "Court lane",
+        "enforcement_lane": "Enforcement lane",
+        "closed_lane": "Closed lane",
+    }
+    return titles.get(code, code)
+
+
 def _serialize_waiting_bucket(bucket: Any) -> dict[str, Any] | None:
     if not bucket:
         return None
@@ -17,14 +43,17 @@ def _serialize_waiting_bucket(bucket: Any) -> dict[str, Any] | None:
     if isinstance(eligible_at, datetime):
         eligible_at = eligible_at.isoformat()
 
-    reason_text = bucket.get("reason_text") or bucket.get("reason")
-    reason_code = bucket.get("reason_code")
+    reason_text = (
+        bucket.get("reason_text")
+        or bucket.get("waiting_reason")
+        or bucket.get("reason")
+    )
 
     return {
         "step_code": bucket.get("step_code"),
-        "bucket_code": bucket.get("bucket_code"),
-        "status": bucket.get("status"),
-        "reason_code": reason_code,
+        "bucket_code": bucket.get("bucket_code") or "waiting_for_eligibility",
+        "status": bucket.get("status") or "waiting",
+        "reason_code": bucket.get("reason_code"),
         "reason_text": reason_text,
         "reason": reason_text,
         "eligible_at": eligible_at,
@@ -38,7 +67,16 @@ def _blocked_hint(blocked_steps: list[Any]) -> str | None:
     first = blocked_steps[0]
 
     if isinstance(first, dict):
-        return first.get("title") or first.get("step_code") or "Есть blocker"
+        blockers = first.get("blockers") or []
+        if blockers:
+            return str(blockers[0])
+
+        return (
+            first.get("title")
+            or first.get("label")
+            or first.get("step_code")
+            or "Есть blocker"
+        )
 
     return str(first)
 
@@ -60,6 +98,7 @@ def serialize_portfolio_case_row(case: Case, playbook_eval: dict[str, Any]) -> d
 
     first_waiting = _serialize_waiting_bucket(waiting_buckets[0]) if waiting_buckets else None
     blocked_hint = _blocked_hint(blocked_steps)
+    route_lane = _route_lane(case)
 
     if routing_status == "waiting" and first_waiting:
         routing_hint = first_waiting.get("reason") or "Ожидает окна выполнения"
@@ -73,20 +112,30 @@ def serialize_portfolio_case_row(case: Case, playbook_eval: dict[str, Any]) -> d
     return {
         "case_id": case.id,
         "debtor_name": case.debtor_name,
-        "contract_type": case.contract_type.value if hasattr(case.contract_type, "value") else str(case.contract_type),
-        "debtor_type": case.debtor_type.value if hasattr(case.debtor_type, "value") else str(case.debtor_type),
-        "status": case.status.value if hasattr(case.status, "value") else str(case.status),
+        "contract_type": getattr(case.contract_type, "value", case.contract_type),
+        "debtor_type": getattr(case.debtor_type, "value", case.debtor_type),
+        "status": getattr(case.status, "value", case.status),
         "is_archived": bool(getattr(case, "is_archived", False)),
         "playbook_code": (playbook_eval.get("playbook") or {}).get("code"),
+        "route_lane": route_lane,
+        "route_lane_title": _route_lane_title(route_lane),
         "routing_status": routing_status,
         "routing_hint": routing_hint,
         "current_step": current_step,
+        "current_step_code": (current_step or {}).get("step_code") if isinstance(current_step, dict) else None,
+        "current_step_title": (current_step or {}).get("title") if isinstance(current_step, dict) else None,
         "next_actions": next_actions,
+        "next_action_codes": [
+            str(item.get("action_code"))
+            for item in next_actions
+            if isinstance(item, dict) and item.get("action_code")
+        ],
         "waiting_bucket": first_waiting,
         "waiting_reason": first_waiting.get("reason") if first_waiting else None,
         "waiting_reason_code": first_waiting.get("reason_code") if first_waiting else None,
         "waiting_eligible_at": first_waiting.get("eligible_at") if first_waiting else None,
         "blocked_steps": blocked_steps,
+        "blocked_hint": blocked_hint,
     }
 
 
@@ -101,9 +150,18 @@ def build_portfolio_routing(
     blocked: list[dict[str, Any]] = []
     idle: list[dict[str, Any]] = []
 
+    lane_summary = {
+        "soft_lane": 0,
+        "court_lane": 0,
+        "enforcement_lane": 0,
+        "closed_lane": 0,
+    }
+
     for case in cases:
         playbook_eval = evaluate_case_playbook(db, case, tenant_id=tenant_id)
         row = serialize_portfolio_case_row(case, playbook_eval)
+
+        lane_summary[row["route_lane"]] = lane_summary.get(row["route_lane"], 0) + 1
 
         status = row["routing_status"]
         if status == "ready":
@@ -123,6 +181,7 @@ def build_portfolio_routing(
             "blocked": len(blocked),
             "idle": len(idle),
         },
+        "lane_summary": lane_summary,
         "buckets": {
             "ready": ready,
             "waiting": waiting,

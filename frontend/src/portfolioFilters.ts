@@ -9,10 +9,15 @@ export function applySmartPortfolioFilters(
 
   return source.filter((row) => {
     const smartLevel = String(filters.smart_level || "").trim().toLowerCase();
+    const priorityBand = String(filters.priority_band || "").trim().toLowerCase();
     const warningsOnly = Boolean(filters.warnings_only);
     const duplicatesOnly = Boolean(filters.duplicates_only);
 
     if (smartLevel && row.smart.smartLevel !== smartLevel) {
+      return false;
+    }
+
+    if (priorityBand && String(row.priority_band || "").toLowerCase() !== priorityBand) {
       return false;
     }
 

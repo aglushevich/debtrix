@@ -1,6 +1,7 @@
 import { PortfolioCaseRow, PortfolioSmartLevel } from "./portfolioSmart";
 
 export type PortfolioSortKey =
+  | "priority"
   | "readiness"
   | "smart_level"
   | "warnings"
@@ -18,7 +19,7 @@ export type PortfolioSorting = {
 };
 
 export const DEFAULT_PORTFOLIO_SORTING: PortfolioSorting = {
-  key: "readiness",
+  key: "priority",
   direction: "desc",
 };
 
@@ -76,6 +77,14 @@ export function sortPortfolioCaseRows(
     let result = 0;
 
     switch (key) {
+      case "priority":
+        result = compareNumbers(
+          Number(a.priority_score ?? a.risk_score ?? 0),
+          Number(b.priority_score ?? b.risk_score ?? 0),
+          direction
+        );
+        break;
+
       case "readiness":
         result = compareNumbers(a.smart.readinessScore, b.smart.readinessScore, direction);
         break;
@@ -123,6 +132,29 @@ export function sortPortfolioCaseRows(
     }
 
     if (result !== 0) return result;
+
+    if (key !== "priority") {
+      const priorityTieBreak = compareNumbers(
+        Number(a.priority_score ?? a.risk_score ?? 0),
+        Number(b.priority_score ?? b.risk_score ?? 0),
+        "desc"
+      );
+      if (priorityTieBreak !== 0) return priorityTieBreak;
+    }
+
+    const amountTieBreak = compareNumbers(
+      parseAmount(a.principal_amount),
+      parseAmount(b.principal_amount),
+      "desc"
+    );
+    if (amountTieBreak !== 0) return amountTieBreak;
+
+    const dueDateTieBreak = compareNumbers(
+      parseDateToTimestamp(a.due_date),
+      parseDateToTimestamp(b.due_date),
+      "asc"
+    );
+    if (dueDateTieBreak !== 0) return dueDateTieBreak;
 
     return compareNumbers(a.id, b.id, "asc");
   });

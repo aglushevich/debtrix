@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { PortfolioFilters } from "./api";
 import {
   PortfolioSortDirection,
@@ -12,13 +12,16 @@ type Props = {
   onChange: (next: PortfolioFilters) => void;
   onChangeSorting: (next: PortfolioSorting) => void;
   onSaveView: (title: string) => Promise<void>;
+  activePresetLabel?: string | null;
+  onClearPreset?: () => void;
 };
 
 const SORT_OPTIONS: Array<{ value: PortfolioSortKey; label: string }> = [
-  { value: "readiness", label: "Readiness" },
-  { value: "smart_level", label: "Smart level" },
-  { value: "warnings", label: "Warnings" },
-  { value: "duplicates", label: "Duplicates" },
+  { value: "priority", label: "Приоритет" },
+  { value: "readiness", label: "Индекс готовности" },
+  { value: "smart_level", label: "Готовность кейса" },
+  { value: "warnings", label: "Проблемы" },
+  { value: "duplicates", label: "Дубли" },
   { value: "amount", label: "Сумма долга" },
   { value: "due_date", label: "Срок оплаты" },
   { value: "status", label: "Статус" },
@@ -30,14 +33,86 @@ const SORT_DIRECTION_OPTIONS: Array<{ value: PortfolioSortDirection; label: stri
   { value: "asc", label: "По возрастанию" },
 ];
 
+function formatStatus(value: string): string {
+  const map: Record<string, string> = {
+    draft: "Черновик",
+    overdue: "Просрочка",
+    pretrial: "Досудебная стадия",
+    court: "Суд",
+    fssp: "ФССП",
+    enforcement: "Исполнительное производство",
+    closed: "Закрыто",
+  };
+
+  return map[value] || value;
+}
+
+function formatDebtorType(value: string): string {
+  const map: Record<string, string> = {
+    company: "Юрлицо",
+    individual: "Физлицо",
+    entrepreneur: "ИП",
+  };
+
+  return map[value] || value;
+}
+
+function formatSmartLevel(value: string): string {
+  const map: Record<string, string> = {
+    ready: "Ready",
+    partial: "Partial",
+    waiting: "Waiting",
+    blocked: "Blocked",
+  };
+
+  return map[value] || value;
+}
+
+function formatPriorityBand(value: string): string {
+  const map: Record<string, string> = {
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    critical: "Critical",
+  };
+
+  return map[value] || value;
+}
+
+function buildActiveFilterLabels(filters: PortfolioFilters): string[] {
+  const labels: string[] = [];
+
+  if (filters.q) labels.push(`Поиск: ${filters.q}`);
+  if (filters.status) labels.push(`Статус: ${formatStatus(String(filters.status))}`);
+  if (filters.contract_type) labels.push(`Договор: ${filters.contract_type}`);
+  if (filters.debtor_type) {
+    labels.push(`Должник: ${formatDebtorType(String(filters.debtor_type))}`);
+  }
+  if (filters.smart_level) {
+    labels.push(`Готовность: ${formatSmartLevel(String(filters.smart_level))}`);
+  }
+  if (filters.priority_band) {
+    labels.push(`Приоритет: ${formatPriorityBand(String(filters.priority_band))}`);
+  }
+  if (filters.warnings_only) labels.push("Только с проблемами");
+  if (filters.duplicates_only) labels.push("Только с дублями");
+  if (filters.include_archived) labels.push("Архив включён");
+
+  return labels;
+}
+
 export default function PortfolioToolbar({
   filters,
   sorting,
   onChange,
   onChangeSorting,
   onSaveView,
+  activePresetLabel,
+  onClearPreset,
 }: Props) {
   const [viewTitle, setViewTitle] = useState("");
+
+  const activeFilterLabels = useMemo(() => buildActiveFilterLabels(filters), [filters]);
 
   async function handleSaveView() {
     const title = viewTitle.trim();
@@ -46,11 +121,32 @@ export default function PortfolioToolbar({
     setViewTitle("");
   }
 
+  function resetFilters() {
+    onChange({
+      q: "",
+      status: undefined,
+      contract_type: undefined,
+      debtor_type: undefined,
+      include_archived: filters.include_archived,
+      smart_level: "",
+      priority_band: "",
+      warnings_only: false,
+      duplicates_only: false,
+    });
+  }
+
+  function resetSorting() {
+    onChangeSorting({
+      key: "priority",
+      direction: "desc",
+    });
+  }
+
   return (
     <section className="panel control-room-toolbar-panel">
       <div className="portfolio-toolbar-header">
         <div>
-          <div className="section-eyebrow">Portfolio filters</div>
+          <div className="section-eyebrow">Портфельные фильтры</div>
           <div className="panel-title" style={{ marginBottom: 6 }}>
             Фильтры и сохранённые срезы
           </div>
@@ -59,6 +155,59 @@ export default function PortfolioToolbar({
           </div>
         </div>
       </div>
+
+      {activePresetLabel && (
+        <div
+          className="panel panel-nested"
+          style={{
+            marginTop: 16,
+            marginBottom: 16,
+            padding: 14,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "center",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div className="label" style={{ marginBottom: 6 }}>
+                Активный операционный drilldown
+              </div>
+              <div style={{ fontWeight: 700 }}>{activePresetLabel}</div>
+              <div className="muted small" style={{ marginTop: 4 }}>
+                Этот срез пришёл из routing, focus queues, priority feed или waiting buckets.
+              </div>
+            </div>
+
+            {onClearPreset && (
+              <button className="secondary-btn" onClick={onClearPreset}>
+                Сбросить drilldown
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeFilterLabels.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div className="label" style={{ marginBottom: 8 }}>
+            Активные фильтры
+          </div>
+
+          <div className="action-list" style={{ flexWrap: "wrap" }}>
+            {activeFilterLabels.map((label) => (
+              <span key={label} className="status-badge status-draft">
+                {label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div
         className="info-grid"
@@ -123,10 +272,10 @@ export default function PortfolioToolbar({
 
       <div
         className="info-grid"
-        style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))", marginTop: 16 }}
+        style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))", marginTop: 16 }}
       >
         <div className="info-item">
-          <span className="label">Smart level</span>
+          <span className="label">Готовность кейса</span>
           <select
             className="small-input"
             value={filters.smart_level || ""}
@@ -146,7 +295,27 @@ export default function PortfolioToolbar({
         </div>
 
         <div className="info-item">
-          <span className="label">Warnings</span>
+          <span className="label">Уровень приоритета</span>
+          <select
+            className="small-input"
+            value={filters.priority_band || ""}
+            onChange={(e) =>
+              onChange({
+                ...filters,
+                priority_band: (e.target.value || "") as PortfolioFilters["priority_band"],
+              })
+            }
+          >
+            <option value="">Все</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+          </select>
+        </div>
+
+        <div className="info-item">
+          <span className="label">Проблемы</span>
           <label style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 38 }}>
             <input
               type="checkbox"
@@ -163,7 +332,7 @@ export default function PortfolioToolbar({
         </div>
 
         <div className="info-item">
-          <span className="label">Duplicates</span>
+          <span className="label">Дубли</span>
           <label style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 38 }}>
             <input
               type="checkbox"
@@ -178,6 +347,59 @@ export default function PortfolioToolbar({
             <span>Только с дублями</span>
           </label>
         </div>
+      </div>
+
+      <div className="action-list" style={{ marginTop: 16, flexWrap: "wrap" }}>
+        <button
+          className="secondary-btn"
+          onClick={() =>
+            onChange({
+              ...filters,
+              priority_band: "critical",
+            })
+          }
+        >
+          🔥 Только critical
+        </button>
+
+        <button
+          className="secondary-btn"
+          onClick={() =>
+            onChange({
+              ...filters,
+              priority_band: "high",
+              smart_level: "",
+            })
+          }
+        >
+          ⚡ Только high
+        </button>
+
+        <button
+          className="secondary-btn"
+          onClick={() =>
+            onChange({
+              ...filters,
+              smart_level: "ready",
+              priority_band: "",
+            })
+          }
+        >
+          ✅ Только ready
+        </button>
+
+        <button
+          className="secondary-btn"
+          onClick={() =>
+            onChange({
+              ...filters,
+              smart_level: "blocked",
+              priority_band: "",
+            })
+          }
+        >
+          ⛔ Только blocked
+        </button>
       </div>
 
       <div
@@ -225,22 +447,8 @@ export default function PortfolioToolbar({
         </div>
       </div>
 
-      <div className="action-list" style={{ marginTop: 16 }}>
-        <button
-          className="secondary-btn"
-          onClick={() =>
-            onChange({
-              q: "",
-              status: undefined,
-              contract_type: undefined,
-              debtor_type: undefined,
-              include_archived: filters.include_archived,
-              smart_level: "",
-              warnings_only: false,
-              duplicates_only: false,
-            })
-          }
-        >
+      <div className="action-list" style={{ marginTop: 16, flexWrap: "wrap" }}>
+        <button className="secondary-btn" onClick={resetFilters}>
           Сбросить фильтры
         </button>
 
@@ -256,17 +464,15 @@ export default function PortfolioToolbar({
           {filters.include_archived ? "Скрыть архив" : "Показать архив"}
         </button>
 
-        <button
-          className="secondary-btn"
-          onClick={() =>
-            onChangeSorting({
-              key: "readiness",
-              direction: "desc",
-            })
-          }
-        >
+        <button className="secondary-btn" onClick={resetSorting}>
           Сбросить сортировку
         </button>
+
+        {onClearPreset && activePresetLabel && (
+          <button className="secondary-btn" onClick={onClearPreset}>
+            Сбросить drilldown
+          </button>
+        )}
       </div>
 
       <div className="portfolio-save-view-row">

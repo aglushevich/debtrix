@@ -20,7 +20,13 @@ function formatMoney(value: number): string {
   });
 }
 
-function riskLabel(level?: string): string {
+function formatMetric(value: any): string {
+  const num = Number(value ?? 0);
+  if (!Number.isFinite(num)) return "0";
+  return num.toLocaleString("ru-RU", { maximumFractionDigits: 1 });
+}
+
+function bandLabel(level?: string): string {
   const map: Record<string, string> = {
     low: "Низкий",
     medium: "Средний",
@@ -30,7 +36,7 @@ function riskLabel(level?: string): string {
   return map[level || ""] || level || "—";
 }
 
-function riskClass(level?: string): string {
+function bandClass(level?: string): string {
   const map: Record<string, string> = {
     low: "risk-low",
     medium: "risk-medium",
@@ -46,7 +52,11 @@ function topSignalsFromDashboard(dashboard: any): Array<{ label: string; count: 
   const counts = new Map<string, number>();
 
   for (const item of priorityItems) {
-    const reasons = Array.isArray(item?.blocked_reasons) ? item.blocked_reasons : [];
+    const reasons = [
+      ...(Array.isArray(item?.decision_blockers) ? item.decision_blockers : []),
+      ...(Array.isArray(item?.priority_reasons) ? item.priority_reasons : []),
+    ];
+
     for (const reason of reasons) {
       const key = String(reason || "").trim();
       if (!key) continue;
@@ -91,6 +101,14 @@ export default function IntelligencePortfolioPanel({
     {}
   );
 
+  const priorityMix = intelligenceKpi?.priority_mix || {};
+  const avgRisk = intelligenceKpi?.avg_risk_score ?? 0;
+  const avgPriority = intelligenceKpi?.avg_priority_score ?? 0;
+  const readyPressure = intelligenceKpi?.ready_pressure ?? 0;
+  const waitingPressure = intelligenceKpi?.waiting_pressure ?? 0;
+  const blockedPressure = intelligenceKpi?.blocked_pressure ?? 0;
+  const healthScore = intelligenceKpi?.portfolio_health_score ?? 0;
+
   return (
     <section className="panel control-room-intelligence-panel">
       <div className="section-header">
@@ -100,7 +118,7 @@ export default function IntelligencePortfolioPanel({
             Intelligence по портфелю
           </div>
           <div className="muted">
-            Сигналы, структура и короткий управленческий срез для ежедневной работы.
+            Портфельный срез: где value, где blockers и что чаще всего тормозит throughput.
           </div>
         </div>
       </div>
@@ -146,13 +164,18 @@ export default function IntelligencePortfolioPanel({
             </div>
 
             <div className="portfolio-mini-stat">
-              <span>Critical</span>
-              <strong>{intelligenceKpi.critical_cases || 0}</strong>
+              <span>Avg risk</span>
+              <strong>{formatMetric(avgRisk)}</strong>
             </div>
 
             <div className="portfolio-mini-stat">
-              <span>High risk</span>
-              <strong>{intelligenceKpi.high_risk_cases || 0}</strong>
+              <span>Avg priority</span>
+              <strong>{formatMetric(avgPriority)}</strong>
+            </div>
+
+            <div className="portfolio-mini-stat">
+              <span>Health</span>
+              <strong>{formatMetric(healthScore)}</strong>
             </div>
 
             <div className="portfolio-mini-stat">
@@ -166,7 +189,7 @@ export default function IntelligencePortfolioPanel({
           <div className="portfolio-section-head">
             <div>
               <div className="portfolio-section-title">Повторяющиеся сигналы</div>
-              <div className="muted small">Что чаще всего мешает throughput</div>
+              <div className="muted small">Что чаще всего поднимает или тормозит кейсы</div>
             </div>
           </div>
 
@@ -185,63 +208,113 @@ export default function IntelligencePortfolioPanel({
         </div>
       </div>
 
-      <div className="portfolio-priority-card" style={{ marginTop: 18 }}>
-        <div className="portfolio-section-head">
-          <div>
-            <div className="portfolio-section-title">Интеллектуальный shortlist</div>
-            <div className="muted small">
-              Несколько наиболее заметных кейсов из priority feed
+      <div className="dashboard-grid dashboard-grid-secondary" style={{ marginTop: 18 }}>
+        <section className="panel panel-nested">
+          <div className="portfolio-section-head">
+            <div>
+              <div className="portfolio-section-title">Priority mix</div>
+              <div className="muted small">Распределение портфеля по priority band</div>
             </div>
           </div>
-        </div>
 
-        {priorityCases.length ? (
-          <div className="priority-case-list">
-            {priorityCases.map((item: any, index: number) => (
-              <button
-                key={item.case_id}
-                className={`priority-case-row ${
-                  selectedCase === item.case_id ? "is-current" : ""
-                }`}
-                onClick={() => onOpenCase(item.case_id)}
-              >
-                <div className="priority-case-rank">{index + 1}</div>
-
-                <div className="priority-case-main">
-                  <div className="priority-case-topline">
-                    <strong>Дело #{item.case_id}</strong>
-                    <span className={`status-badge status-${item.status || "draft"}`}>
-                      {formatCaseStatus(item.status)}
-                    </span>
-                  </div>
-
-                  <div className="priority-case-debtor">{item.debtor_name || "—"}</div>
-
-                  <div className="priority-case-meta">
-                    <span>{item.contract_type || "—"}</span>
-                    <span>·</span>
-                    <span>{formatDebtorType(item.debtor_type)}</span>
-                    <span>·</span>
-                    <span>{item.principal_amount || "—"} ₽</span>
-                  </div>
-
-                  <div className="priority-case-hint">
-                    {item.blocked_reasons?.[0] || "Открыть карточку и проверить кейс"}
-                  </div>
-                </div>
-
-                <div className="priority-case-side">
-                  <div className={`risk-pill ${riskClass(item.risk_level)}`}>
-                    {riskLabel(item.risk_level)}
-                  </div>
-                  <div className="priority-risk-score">{item.risk_score ?? 0}</div>
-                </div>
-              </button>
-            ))}
+          <div className="portfolio-mini-stats">
+            <div className="portfolio-mini-stat">
+              <span>Critical</span>
+              <strong>{priorityMix.critical || 0}</strong>
+            </div>
+            <div className="portfolio-mini-stat">
+              <span>High</span>
+              <strong>{priorityMix.high || 0}</strong>
+            </div>
+            <div className="portfolio-mini-stat">
+              <span>Medium</span>
+              <strong>{priorityMix.medium || 0}</strong>
+            </div>
+            <div className="portfolio-mini-stat">
+              <span>Low</span>
+              <strong>{priorityMix.low || 0}</strong>
+            </div>
           </div>
-        ) : (
-          <div className="empty-box">Приоритетные кейсы пока не сформированы.</div>
-        )}
+
+          <div className="portfolio-mini-stats" style={{ marginTop: 12 }}>
+            <div className="portfolio-mini-stat">
+              <span>Ready pressure</span>
+              <strong>{formatMetric(readyPressure)}</strong>
+            </div>
+            <div className="portfolio-mini-stat">
+              <span>Waiting pressure</span>
+              <strong>{formatMetric(waitingPressure)}</strong>
+            </div>
+            <div className="portfolio-mini-stat">
+              <span>Blocked pressure</span>
+              <strong>{formatMetric(blockedPressure)}</strong>
+            </div>
+          </div>
+        </section>
+
+        <div className="portfolio-priority-card">
+          <div className="portfolio-section-head">
+            <div>
+              <div className="portfolio-section-title">Интеллектуальный shortlist</div>
+              <div className="muted small">
+                Наиболее значимые кейсы из priority feed с объяснением приоритета
+              </div>
+            </div>
+          </div>
+
+          {priorityCases.length ? (
+            <div className="priority-case-list">
+              {priorityCases.map((item: any, index: number) => (
+                <button
+                  key={item.case_id}
+                  className={`priority-case-row ${
+                    selectedCase === item.case_id ? "is-current" : ""
+                  }`}
+                  onClick={() => onOpenCase(item.case_id)}
+                >
+                  <div className="priority-case-rank">{index + 1}</div>
+
+                  <div className="priority-case-main">
+                    <div className="priority-case-topline">
+                      <strong>Дело #{item.case_id}</strong>
+                      <span className={`status-badge status-${item.status || "draft"}`}>
+                        {formatCaseStatus(item.status)}
+                      </span>
+                    </div>
+
+                    <div className="priority-case-debtor">{item.debtor_name || "—"}</div>
+
+                    <div className="priority-case-meta">
+                      <span>{item.contract_type || "—"}</span>
+                      <span>·</span>
+                      <span>{formatDebtorType(item.debtor_type)}</span>
+                      <span>·</span>
+                      <span>{item.principal_amount || "—"} ₽</span>
+                    </div>
+
+                    <div className="priority-case-hint">
+                      {item.operator_focus ||
+                        item.priority_reasons?.[0] ||
+                        item.blocked_reasons?.[0] ||
+                        "Открыть карточку и проверить кейс"}
+                    </div>
+                  </div>
+
+                  <div className="priority-case-side">
+                    <div className={`risk-pill ${bandClass(item.priority_band || item.risk_level)}`}>
+                      {bandLabel(item.priority_band || item.risk_level)}
+                    </div>
+                    <div className="priority-risk-score">
+                      {item.priority_score ?? item.risk_score ?? 0}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-box">Приоритетные кейсы пока не сформированы.</div>
+          )}
+        </div>
       </div>
     </section>
   );

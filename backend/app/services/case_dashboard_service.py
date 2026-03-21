@@ -160,6 +160,94 @@ def _related_cases(db: Session, case: Case) -> dict[str, Any]:
         "related_cases": items,
     }
 
+def _build_decision_explain(case: Case, projection: dict[str, Any] | None) -> dict[str, Any]:
+    positives: list[str] = []
+    blockers: list[str] = []
+    signals: list[str] = []
+
+    projection = projection or {}
+    smart = dict((case.meta or {}).get("smart") or {})
+    stage = dict(projection.get("stage") or {})
+    routing = build_routing_snapshot(case) or {}
+
+    contract_type = getattr(case.contract_type, "value", case.contract_type)
+    debtor_type = getattr(case.debtor_type, "value", case.debtor_type)
+
+    if case.principal_amount is not None:
+        try:
+            if float(case.principal_amount) > 0:
+                positives.append("Есть непогашенная сумма задолженности")
+        except Exception:
+            signals.append("Сумма долга требует дополнительной проверки")
+
+    if case.due_date:
+        positives.append("У дела указан срок оплаты")
+    else:
+        blockers.append("Не указан срок оплаты")
+
+    if contract_type:
+        positives.append("Тип договора определён")
+    else:
+        blockers.append("Не указан тип договора")
+
+    if debtor_type:
+        positives.append("Тип должника определён")
+    else:
+        blockers.append("Не определён тип должника")
+
+    warnings = smart.get("warnings") or []
+    if isinstance(warnings, list):
+        for item in warnings[:3]:
+            blockers.append(str(item))
+
+    smart_signals = smart.get("signals") or []
+    if isinstance(smart_signals, list):
+        for item in smart_signals[:4]:
+            signals.append(str(item))
+
+    readiness_level = smart.get("readiness_level")
+    readiness_score = smart.get("readiness_score")
+
+    if readiness_level == "ready":
+        positives.append("Карточка дела готова к следующему действию")
+    elif readiness_level == "partial":
+        signals.append("Карточка частично готова, есть пробелы в данных")
+    elif readiness_level == "waiting":
+        blockers.append("Дело находится в waiting-состоянии")
+    elif readiness_level == "draft":
+        blockers.append("Дело пока находится в черновом состоянии")
+
+    if readiness_score is not None:
+        signals.append(f"Readiness score: {readiness_score}")
+
+    stage_status = stage.get("status")
+    if stage_status:
+        signals.append(f"Текущая стадия: {stage_status}")
+
+    routing_bucket = routing.get("bucket_code")
+    if routing_bucket == "ready":
+        positives.append("Маршрутизация показывает, что кейс можно двигать сейчас")
+    elif routing_bucket == "waiting":
+        blockers.append("Маршрутизация поместила кейс в waiting bucket")
+    elif routing_bucket == "blocked":
+        blockers.append("Маршрутизация поместила кейс в blocked bucket")
+    elif routing_bucket:
+        signals.append(f"Routing bucket: {routing_bucket}")
+
+    next_actions = stage.get("actions") or []
+    if isinstance(next_actions, list) and next_actions:
+        next_action = next_actions[0]
+        title = next_action.get("title_ru") or next_action.get("title") or next_action.get("code")
+        if title:
+            positives.append(f"Следующее доступное действие: {title}")
+    else:
+        blockers.append("Нет доступных действий на текущем этапе")
+
+    return {
+        "positives": list(dict.fromkeys(positives)),
+        "blockers": list(dict.fromkeys(blockers)),
+        "signals": list(dict.fromkeys(signals)),
+    }
 
 def build_case_dashboard(db: Session, case_id: int) -> dict[str, Any]:
     case = db.query(Case).filter(Case.id == case_id).first()
@@ -225,4 +313,5 @@ def build_case_dashboard(db: Session, case_id: int) -> dict[str, Any]:
         "debtor_intelligence": build_debtor_intelligence_payload(db, case),
         "organization_starter_kit": build_organization_starter_kit_payload(db, case),
         "routing": build_routing_snapshot(case),
+        "decision_explain": _build_decision_explain(case, projection),
     }

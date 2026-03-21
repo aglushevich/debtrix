@@ -86,6 +86,48 @@ function triggerBrowserDownload(blob: Blob, filename: string) {
   window.URL.revokeObjectURL(url);
 }
 
+async function fetchDashboardRaw(caseId: number): Promise<any> {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/dashboard`));
+  return safeParseOrFallback(res, emptyDashboard(caseId));
+}
+
+function mapTimelineEventToExecutionItem(item: any) {
+  const eventType = String(item?.event_type || "");
+  const details = String(item?.details || "");
+
+  const actionCodeMatch = details.match(/action_code=([a-zA-Z0-9_\-]+)/);
+  const actionCode = actionCodeMatch?.[1] || eventType;
+
+  let status = "completed";
+  if (eventType.includes("failed") || eventType.includes("error")) status = "failed";
+  else if (eventType.includes("blocked")) status = "blocked";
+  else if (eventType.includes("waiting")) status = "waiting";
+  else if (eventType.includes("started") || eventType.includes("running")) status = "running";
+  else if (eventType.includes("not_applicable")) status = "not_applicable";
+  else if (eventType.includes("done") || eventType.includes("finished")) status = "completed";
+  else if (eventType === "stage_action_applied") status = "completed";
+
+  return {
+    id: item?.id,
+    action_code: actionCode,
+    status,
+    reason: item?.details || "",
+    created_at: item?.created_at || null,
+  };
+}
+
+function buildFallbackDebtMapFromGraph(graphPayload: DebtorGraphResponse) {
+  return {
+    case_id: graphPayload.case_id,
+    nodes: graphPayload.graph?.nodes || [],
+    edges: graphPayload.graph?.edges || [],
+    related_cases: graphPayload.related_cases || [],
+    auto_links: graphPayload.auto_links || [],
+    summary: graphPayload.summary || null,
+    graph: graphPayload.graph || { nodes: [], edges: [] },
+  };
+}
+
 export type DebtorGraphNode = {
   id: string;
   type?: string;
@@ -144,6 +186,9 @@ export type DebtorGraphResponse = {
     risk_level?: string;
     signals?: string[];
   };
+  signals?: string[];
+  recommendations?: string[];
+  graph_hints?: string[];
   related_cases?: DebtorGraphRelatedCase[];
   participants?: any[];
   auto_links?: DebtorGraphAutoLink[];
@@ -356,6 +401,49 @@ export type BatchPreviewBucket = {
   case_ids?: number[];
 };
 
+export type BatchCaseSnapshot = {
+  case_id: number;
+  debtor_name?: string | null;
+  contract_type?: string | null;
+  debtor_type?: string | null;
+  status?: string | null;
+  lane?: string | null;
+  is_archived?: boolean;
+};
+
+export type BatchGuardrailWarning = {
+  code: string;
+  message: string;
+  severity: "low" | "medium" | "high" | string;
+};
+
+export type BatchGuardrails = {
+  is_homogeneous?: boolean;
+  recommended_mode?: string;
+  recommended_action?: string;
+  warnings?: BatchGuardrailWarning[];
+  selection?: {
+    total_cases?: number;
+    archived_cases?: number;
+    counts_by_contract_type?: Record<string, number>;
+    counts_by_debtor_type?: Record<string, number>;
+    counts_by_status?: Record<string, number>;
+    counts_by_lane?: Record<string, number>;
+    counts_by_bucket?: Record<string, number>;
+  };
+  force_used?: boolean;
+  executed_cases?: number;
+};
+
+export type BatchPreviewSubset = {
+  code: string;
+  title: string;
+  description?: string | null;
+  count: number;
+  case_ids: number[];
+  recommended?: boolean;
+};
+
 export type BatchPreviewResponse = {
   ok?: boolean;
   action_code?: string;
@@ -372,7 +460,11 @@ export type BatchPreviewResponse = {
     bucket: string;
     reason?: string | null;
     eligible_at?: string | null;
+    snapshot?: BatchCaseSnapshot | null;
   }>;
+  guardrails?: BatchGuardrails | null;
+  subsets?: BatchPreviewSubset[];
+  recommended_subset_code?: string | null;
 };
 
 export type BatchRunResponse = {
@@ -386,8 +478,10 @@ export type BatchRunResponse = {
     reason?: string | null;
     eligible_at?: string | null;
     payload?: Record<string, any> | null;
+    snapshot?: BatchCaseSnapshot | null;
   }>;
   summary?: Record<string, number>;
+  guardrails?: BatchGuardrails | null;
 };
 
 export type PortfolioFilters = {
@@ -397,6 +491,7 @@ export type PortfolioFilters = {
   debtor_type?: string;
   include_archived?: boolean;
   smart_level?: "ready" | "partial" | "waiting" | "blocked" | "";
+  priority_band?: "low" | "medium" | "high" | "critical" | "";
   warnings_only?: boolean;
   duplicates_only?: boolean;
 };
@@ -426,6 +521,10 @@ export type PortfolioRoutingCaseItem = {
   debtor_type?: string;
   status?: string;
   routing_status?: string;
+  routing_hint?: string | null;
+  waiting_reason?: string | null;
+  waiting_reason_code?: string | null;
+  waiting_eligible_at?: string | null;
   is_archived?: boolean;
 };
 
@@ -451,8 +550,13 @@ export type WaitingBucketItem = {
   step_code?: string;
   bucket_code?: string;
   reason?: string | null;
+  reason_text?: string | null;
+  reason_code?: string | null;
   eligible_at?: string | null;
   principal_amount?: string | null;
+  status?: string | null;
+  route_lane?: string | null;
+  is_archived?: boolean;
 };
 
 export type WaitingBucketsResponse = {
@@ -483,10 +587,38 @@ export type ControlRoomPriorityCase = {
   debtor_type?: string;
   principal_amount?: string;
   due_date?: string | null;
+
   risk_score?: number;
   risk_level?: string;
+
+  priority_score?: number;
+  priority_band?: "low" | "medium" | "high" | "critical" | string;
+  priority_band_label?: string;
+  priority_reasons?: string[];
+  operator_focus?: string | null;
+
+  decision_positives?: string[];
+  decision_blockers?: string[];
+  decision_signals?: string[];
+  signals?: string[];
+
+  routing_bucket?: string | null;
+  routing_status?: string | null;
+  routing_hint?: string | null;
+  route_lane?: string | null;
+  waiting_reason?: string | null;
+  waiting_eligible_at?: string | null;
+
+  recommended_action?: string | null;
+
   blocked?: boolean;
   blocked_reasons?: string[];
+  is_blocked?: boolean;
+  is_waiting?: boolean;
+  is_ready_now?: boolean;
+  is_court_lane?: boolean;
+  is_enforcement_lane?: boolean;
+
   inn?: string | null;
   ogrn?: string | null;
   is_archived?: boolean;
@@ -513,6 +645,55 @@ export type ControlRoomExecutionConsoleResponse = {
   automation_metrics?: Record<string, number>;
 };
 
+export type FocusQueueItem = {
+  case_id: number;
+  queue_code?: string;
+  queue_title?: string;
+  debtor_name?: string;
+  status?: string;
+  contract_type?: string;
+  debtor_type?: string;
+  principal_amount?: string;
+  due_date?: string | null;
+
+  risk_score?: number;
+  risk_level?: string;
+
+  priority_score?: number;
+  priority_band?: "low" | "medium" | "high" | "critical" | string;
+  priority_band_label?: string;
+  priority_reasons?: string[];
+  operator_focus?: string | null;
+
+  routing_status?: string | null;
+  routing_hint?: string | null;
+  waiting_reason?: string | null;
+  waiting_eligible_at?: string | null;
+  blocked_reasons?: string[];
+  recommended_action?: string | null;
+
+  is_archived?: boolean;
+  inn?: string | null;
+  ogrn?: string | null;
+};
+
+export type FocusQueuesResponse = {
+  summary?: {
+    urgent_ready?: number;
+    blocked_cleanup?: number;
+    waiting_next?: number;
+    court_lane?: number;
+    enforcement_lane?: number;
+  };
+  queues?: {
+    urgent_ready?: FocusQueueItem[];
+    blocked_cleanup?: FocusQueueItem[];
+    waiting_next?: FocusQueueItem[];
+    court_lane?: FocusQueueItem[];
+    enforcement_lane?: FocusQueueItem[];
+  };
+};
+
 export type ControlRoomDashboardResponse = {
   summary?: ControlRoomSummary;
   routing?: PortfolioRoutingResponse;
@@ -522,10 +703,29 @@ export type ControlRoomDashboardResponse = {
     items?: ControlRoomPriorityCase[];
     total?: number;
   };
+  focus_queues?: FocusQueuesResponse;
   intelligence_kpi?: {
     high_risk_cases?: number;
     critical_cases?: number;
     blocked_high_risk_cases?: number;
+    ready_now_cases?: number;
+    waiting_cases?: number;
+    blocked_cases?: number;
+    soft_lane_cases?: number;
+    court_lane_cases?: number;
+    enforcement_lane_cases?: number;
+    avg_risk_score?: number;
+    avg_priority_score?: number;
+    priority_mix?: {
+      low?: number;
+      medium?: number;
+      high?: number;
+      critical?: number;
+    };
+    ready_pressure?: number;
+    waiting_pressure?: number;
+    blocked_pressure?: number;
+    portfolio_health_score?: number;
   };
 };
 
@@ -588,6 +788,58 @@ function emptyDashboard(caseId: number) {
         cases_count: 0,
         total_principal_amount: "0.00",
       },
+    },
+    debtor_intelligence: {
+      debtor: null,
+      summary: {
+        cases_count: 0,
+        participants_count: 0,
+        auto_links_count: 0,
+        risk_score: 0,
+        risk_level: "low",
+        signals: [],
+      },
+      signals: [],
+      recommendations: [],
+      graph_hints: [],
+      related_cases: [],
+      participants: [],
+      auto_links: [],
+      graph: {
+        nodes: [],
+        edges: [],
+      },
+    },
+    organization_starter_kit: {
+      organization: null,
+      creditor: null,
+      summary: {
+        completion_percent: 0,
+        filled_fields: 0,
+        missing_fields_count: 0,
+        linked_cases_count: 0,
+        linked_debtors_count: 0,
+        active_cases_count: 0,
+        archived_cases_count: 0,
+        total_principal_amount: "0.00",
+        readiness_score: 0,
+      },
+      readiness: {
+        level: "missing",
+        ready: false,
+        missing_fields: [],
+        checks: [],
+      },
+      linked_cases: [],
+      graph_hints: [],
+      signals: [],
+      recommendations: [],
+    },
+    routing: {
+      bucket_code: null,
+      status: null,
+      reason_code: null,
+      eligible_at: null,
     },
   };
 }
@@ -678,43 +930,79 @@ export async function downloadDocument(
 }
 
 export async function initRecovery(caseId: number) {
-  throw new Error(`Recovery init для дела #${caseId} пока не подключён.`);
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/recovery/init`), {
+    method: "POST",
+  });
+
+  return parseResponse(res);
 }
 
 export async function getRecovery(caseId: number) {
-  return {
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/recovery`));
+  return safeParseOrFallback(res, {
     case_id: caseId,
-    accrued: {},
-    payments: [],
-    status: "not_available",
-  };
+    recovery: {
+      components: {},
+      payments: [],
+      principal_amount: "0.00",
+      total_amount: "0.00",
+      payments_total: "0.00",
+      outstanding_amount: "0.00",
+      status: "not_initialized",
+    },
+  });
 }
 
 export async function patchAccrued(caseId: number, accrued: Record<string, any>) {
-  return {
-    ok: false,
-    case_id: caseId,
-    accrued,
-    message: "Recovery accrued пока не подключён на backend.",
-  };
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/recovery/accrued`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(accrued),
+  });
+
+  return parseResponse(res);
 }
 
 export async function addPayment(caseId: number, amount: string) {
-  return {
-    ok: false,
-    case_id: caseId,
-    amount,
-    message: "Payments пока не подключены на backend.",
-  };
+  const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/recovery/payments`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      amount,
+      source: "manual",
+    }),
+  });
+
+  return parseResponse(res);
 }
 
 export async function getDebtorIntelligence(caseId: number) {
-  return {
-    case_id: caseId,
-    summary: null,
-    signals: [],
-    recommendations: [],
-  };
+  const dashboard = await fetchDashboardRaw(caseId);
+
+  return (
+    dashboard?.debtor_intelligence || {
+      case_id: caseId,
+      debtor: null,
+      summary: {
+        cases_count: 0,
+        participants_count: 0,
+        auto_links_count: 0,
+        risk_score: 0,
+        risk_level: "low",
+        signals: [],
+      },
+      signals: [],
+      recommendations: [],
+      graph_hints: [],
+      related_cases: [],
+      participants: [],
+      auto_links: [],
+      graph: {
+        nodes: [],
+        edges: [],
+      },
+    }
+  );
 }
 
 export async function getAvailableDocuments(caseId: number) {
@@ -764,22 +1052,26 @@ export async function getDebtorProfile(caseId: number) {
 }
 
 export async function getDebtorDashboard(debtorId: number) {
-  return {
+  const res = await fetch(withWorkspace(`${API_BASE}/debtors/${debtorId}/dashboard`));
+  return safeParseOrFallback(res, {
     debtor_id: debtorId,
     debtor: null,
     cases: [],
     summary: {
       cases_count: 0,
+      active_cases_count: 0,
+      archived_cases_count: 0,
       total_principal_amount: "0.00",
     },
-  };
+  });
 }
 
 export async function getDebtorCases(debtorId: number) {
-  return {
+  const res = await fetch(withWorkspace(`${API_BASE}/debtors/${debtorId}/cases`));
+  return safeParseOrFallback(res, {
     debtor_id: debtorId,
     items: [],
-  };
+  });
 }
 
 export async function lookupOrganization(payload: { inn?: string; ogrn?: string }) {
@@ -798,67 +1090,74 @@ export async function getCaseParticipants(caseId: number) {
 }
 
 export async function getDebtMap(caseId: number) {
-  return {
-    case_id: caseId,
-    nodes: [],
-    edges: [],
-    summary: null,
-  };
+  const graph = await getDebtorGraph(caseId);
+  return buildFallbackDebtMapFromGraph(graph);
 }
 
 export async function getDebtorGraph(
   caseId: number
 ): Promise<DebtorGraphResponse> {
-  return {
-    case_id: caseId,
-    debtor: null,
-    summary: {
-      cases_count: 0,
-      participants_count: 0,
-      auto_links_count: 0,
-      risk_score: 0,
-      risk_level: "unknown",
+  const dashboard = await fetchDashboardRaw(caseId);
+
+  return (
+    dashboard?.debtor_intelligence || {
+      case_id: caseId,
+      debtor: null,
+      summary: {
+        cases_count: 0,
+        participants_count: 0,
+        auto_links_count: 0,
+        risk_score: 0,
+        risk_level: "unknown",
+        signals: [],
+      },
       signals: [],
-    },
-    related_cases: [],
-    participants: [],
-    auto_links: [],
-    graph: {
-      nodes: [],
-      edges: [],
-    },
-  };
+      recommendations: [],
+      graph_hints: [],
+      related_cases: [],
+      participants: [],
+      auto_links: [],
+      graph: {
+        nodes: [],
+        edges: [],
+      },
+    }
+  );
 }
 
 export async function getOrganizationStarterKit(
   caseId: number
 ): Promise<OrganizationStarterKitResponse> {
-  return {
-    case_id: caseId,
-    organization: null,
-    creditor: null,
-    summary: {
-      completion_percent: 0,
-      filled_fields: 0,
-      missing_fields_count: 0,
-      linked_cases_count: 0,
-      linked_debtors_count: 0,
-      active_cases_count: 0,
-      archived_cases_count: 0,
-      total_principal_amount: "0.00",
-      readiness_score: 0,
-    },
-    readiness: {
-      level: "missing",
-      ready: false,
-      missing_fields: [],
-      checks: [],
-    },
-    linked_cases: [],
-    graph_hints: [],
-    signals: [],
-    recommendations: [],
-  };
+  const dashboard = await fetchDashboardRaw(caseId);
+
+  return (
+    dashboard?.organization_starter_kit || {
+      case_id: caseId,
+      organization: null,
+      creditor: null,
+      summary: {
+        completion_percent: 0,
+        filled_fields: 0,
+        missing_fields_count: 0,
+        linked_cases_count: 0,
+        linked_debtors_count: 0,
+        active_cases_count: 0,
+        archived_cases_count: 0,
+        total_principal_amount: "0.00",
+        readiness_score: 0,
+      },
+      readiness: {
+        level: "missing",
+        ready: false,
+        missing_fields: [],
+        checks: [],
+      },
+      linked_cases: [],
+      graph_hints: [],
+      signals: [],
+      recommendations: [],
+    }
+  );
 }
 
 export async function getCaseIntegrations(
@@ -907,9 +1206,12 @@ export async function prepareExternalAction(
 export async function startEsiaSession(
   actionId: number
 ): Promise<StartEsiaSessionResponse> {
-  const res = await fetch(withWorkspace(`${API_BASE}/external-actions/${actionId}/esia-session/start`), {
-    method: "POST",
-  });
+  const res = await fetch(
+    withWorkspace(`${API_BASE}/external-actions/${actionId}/esia-session/start`),
+    {
+      method: "POST",
+    }
+  );
   return parseResponse<StartEsiaSessionResponse>(res);
 }
 
@@ -1024,6 +1326,26 @@ export async function getControlRoomSummary(): Promise<ControlRoomSummary> {
   return safeParseOrFallback(res, {});
 }
 
+export async function getFocusQueues(): Promise<FocusQueuesResponse> {
+  const res = await fetch(withWorkspace(`${API_BASE}/control-room/focus-queues`));
+  return safeParseOrFallback(res, {
+    summary: {
+      urgent_ready: 0,
+      blocked_cleanup: 0,
+      waiting_next: 0,
+      court_lane: 0,
+      enforcement_lane: 0,
+    },
+    queues: {
+      urgent_ready: [],
+      blocked_cleanup: [],
+      waiting_next: [],
+      court_lane: [],
+      enforcement_lane: [],
+    },
+  });
+}
+
 export async function getControlRoomDashboard(): Promise<ControlRoomDashboardResponse> {
   const res = await fetch(withWorkspace(`${API_BASE}/control-room/dashboard`));
   return safeParseOrFallback(res, {
@@ -1044,6 +1366,22 @@ export async function getControlRoomDashboard(): Promise<ControlRoomDashboardRes
       automation_metrics: {},
     },
     priority_cases: { items: [], total: 0 },
+    focus_queues: {
+      summary: {
+        urgent_ready: 0,
+        blocked_cleanup: 0,
+        waiting_next: 0,
+        court_lane: 0,
+        enforcement_lane: 0,
+      },
+      queues: {
+        urgent_ready: [],
+        blocked_cleanup: [],
+        waiting_next: [],
+        court_lane: [],
+        enforcement_lane: [],
+      },
+    },
     intelligence_kpi: {},
   });
 }
@@ -1134,10 +1472,31 @@ export async function getPortfolioCases(filters: PortfolioFilters = {}) {
 export async function getExecutionHistory(caseId: number) {
   const res = await fetch(withWorkspace(`${API_BASE}/cases/${caseId}/execution-history`));
 
-  return safeParseOrFallback(res, {
+  if (res.status !== 404) {
+    return safeParseOrFallback(res, {
+      case_id: caseId,
+      items: [],
+    });
+  }
+
+  const timeline = await getTimeline(caseId);
+  const sourceItems = Array.isArray(timeline?.items) ? timeline.items : [];
+
+  const executionItems = sourceItems
+    .filter((item: any) => {
+      const eventType = String(item?.event_type || "");
+      return (
+        eventType === "stage_action_applied" ||
+        eventType.startsWith("automation_") ||
+        eventType.startsWith("batch_")
+      );
+    })
+    .map(mapTimelineEventToExecutionItem);
+
+  return {
     case_id: caseId,
-    items: [],
-  });
+    items: executionItems,
+  };
 }
 
 /* --------------------------

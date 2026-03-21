@@ -1,5 +1,7 @@
 export type PortfolioSmartLevel = "ready" | "partial" | "waiting" | "blocked";
 
+export type PortfolioPriorityBand = "low" | "medium" | "high" | "critical";
+
 export type PortfolioCaseSmartSignals = {
   readinessScore: number;
   smartLevel: PortfolioSmartLevel;
@@ -15,6 +17,16 @@ export type PortfolioCaseSmartSignals = {
   routingStatus?: string | null;
   routingHint?: string | null;
   waitingEligibleAt?: string | null;
+  routeLane?: string | null;
+
+  riskScore?: number | null;
+  riskLevel?: string | null;
+  priorityScore?: number | null;
+  priorityBand?: string | null;
+  priorityBandLabel?: string | null;
+  priorityReasons?: string[];
+  operatorFocus?: string | null;
+  recommendedAction?: string | null;
 };
 
 export type PortfolioCaseRow = {
@@ -28,6 +40,15 @@ export type PortfolioCaseRow = {
   status?: string | null;
   is_archived?: boolean;
 
+  risk_score?: number | null;
+  risk_level?: string | null;
+  priority_score?: number | null;
+  priority_band?: string | null;
+  priority_band_label?: string | null;
+  priority_reasons?: string[];
+  operator_focus?: string | null;
+  recommended_action?: string | null;
+
   smart: PortfolioCaseSmartSignals;
 };
 
@@ -37,6 +58,23 @@ type RoutingRowLike = {
   routing_hint?: string | null;
   waiting_eligible_at?: string | null;
   waiting_reason?: string | null;
+  route_lane?: string | null;
+};
+
+type PriorityRowLike = {
+  case_id: number;
+  risk_score?: number;
+  risk_level?: string | null;
+  priority_score?: number;
+  priority_band?: string | null;
+  priority_band_label?: string | null;
+  priority_reasons?: string[];
+  operator_focus?: string | null;
+  recommended_action?: string | null;
+  routing_status?: string | null;
+  routing_hint?: string | null;
+  waiting_eligible_at?: string | null;
+  route_lane?: string | null;
 };
 
 function normalizeString(value?: string | null) {
@@ -47,7 +85,7 @@ function computeWarnings(item: any): string[] {
   const warnings: string[] = [];
 
   if (!item?.debtor_name) warnings.push("missing_debtor_name");
-  if (!item?.inn) warnings.push("missing_inn");
+  if (!item?.inn && !item?.contract_data?.debtor?.inn) warnings.push("missing_inn");
   if (!item?.due_date) warnings.push("missing_due_date");
   if (!item?.principal_amount) warnings.push("missing_principal_amount");
   if (!item?.contract_type) warnings.push("missing_contract_type");
@@ -58,34 +96,41 @@ function computeWarnings(item: any): string[] {
 }
 
 function computeDuplicates(item: any, all: any[]) {
-  const inn = normalizeString(item?.inn);
+  const inn = normalizeString(item?.inn || item?.contract_data?.debtor?.inn);
   const name = normalizeString(item?.debtor_name);
 
   return all
     .filter((other) => {
       if (other.id === item.id) return false;
 
-      if (inn && normalizeString(other?.inn) === inn) return true;
+      const otherInn = normalizeString(other?.inn || other?.contract_data?.debtor?.inn);
+      const otherName = normalizeString(other?.debtor_name);
 
-      if (!inn && name && normalizeString(other?.debtor_name) === name) return true;
+      if (inn && otherInn && otherInn === inn) return true;
+      if (!inn && name && otherName === name) return true;
 
       return false;
     })
     .map((d) => d.id);
 }
 
-function computeReadiness(item: any) {
+function computeReadiness(item: any, routingRow?: RoutingRowLike | null) {
   let score = 0;
 
   if (item?.debtor_name) score += 15;
-  if (item?.inn) score += 20;
+  if (item?.inn || item?.contract_data?.debtor?.inn) score += 20;
   if (item?.principal_amount) score += 20;
   if (item?.due_date) score += 15;
   if (item?.contract_type) score += 10;
   if (item?.status !== "draft") score += 10;
   if (!item?.is_archived) score += 10;
 
-  return Math.min(score, 100);
+  const routingStatus = String(routingRow?.routing_status || "").toLowerCase();
+  if (routingStatus === "ready") score += 10;
+  if (routingStatus === "blocked") score -= 15;
+  if (routingStatus === "waiting") score -= 5;
+
+  return Math.max(0, Math.min(score, 100));
 }
 
 function computeSmartLevel(
@@ -160,20 +205,45 @@ function isEligibleReached(value?: string | null): boolean {
   return date.getTime() <= Date.now();
 }
 
+function laneLabel(code?: string | null): string | null {
+  const map: Record<string, string> = {
+    soft_lane: "Soft lane",
+    court_lane: "Court lane",
+    enforcement_lane: "Enforcement lane",
+    closed_lane: "Closed lane",
+  };
+
+  if (!code) return null;
+  return map[code] || code;
+}
+
 function buildHint(
   level: PortfolioSmartLevel,
   warnings: string[],
   duplicates: number[],
-  routingRow?: RoutingRowLike | null
+  routingRow?: RoutingRowLike | null,
+  priorityRow?: PriorityRowLike | null
 ) {
-  const routingStatus = String(routingRow?.routing_status || "").toLowerCase();
-  const routingHint = routingRow?.routing_hint || null;
-  const waitingEligibleAt = routingRow?.waiting_eligible_at || null;
+  const routingStatus = String(
+    priorityRow?.routing_status || routingRow?.routing_status || ""
+  ).toLowerCase();
+  const routingHint = priorityRow?.routing_hint || routingRow?.routing_hint || null;
+  const waitingEligibleAt =
+    priorityRow?.waiting_eligible_at || routingRow?.waiting_eligible_at || null;
+  const routeLane = laneLabel(priorityRow?.route_lane || routingRow?.route_lane);
+
+  if (priorityRow?.operator_focus) {
+    return priorityRow.operator_focus;
+  }
+
+  if (priorityRow?.recommended_action) {
+    return priorityRow.recommended_action;
+  }
 
   if (routingStatus === "waiting") {
     if (waitingEligibleAt) {
       if (isEligibleReached(waitingEligibleAt)) {
-        return "Срок ожидания наступил";
+        return "Срок ожидания уже наступил";
       }
 
       const formatted = formatEligibleAtShort(waitingEligibleAt);
@@ -188,14 +258,8 @@ function buildHint(
   }
 
   if (routingStatus === "ready") {
+    if (routeLane) return `${routeLane} · готово к шагу`;
     return routingHint || "Готово к действию";
-  }
-
-  if (level === "waiting") return "Ожидает окна действия";
-
-  if (level === "blocked") {
-    if (warnings.length > 0) return warningLabel(warnings[0]);
-    return "Требует данных";
   }
 
   if (duplicates.length > 0) {
@@ -206,7 +270,13 @@ function buildHint(
     return warningLabel(warnings[0]);
   }
 
+  if (routeLane) {
+    return routeLane;
+  }
+
   if (level === "ready") return "Готово к действию";
+  if (level === "waiting") return "Ожидает окна действия";
+  if (level === "blocked") return "Требует данных";
 
   return "Частично готово";
 }
@@ -231,18 +301,103 @@ function buildRoutingMap(routing?: any): Map<number, RoutingRowLike> {
   return map;
 }
 
+function buildPriorityMap(priorityItems?: any[]): Map<number, PriorityRowLike> {
+  const map = new Map<number, PriorityRowLike>();
+
+  for (const row of Array.isArray(priorityItems) ? priorityItems : []) {
+    const caseId = Number(row?.case_id);
+    if (!caseId) continue;
+    map.set(caseId, row);
+  }
+
+  return map;
+}
+
+function fallbackPriorityBand(score: number): PortfolioPriorityBand {
+  if (score >= 80) return "critical";
+  if (score >= 55) return "high";
+  if (score >= 30) return "medium";
+  return "low";
+}
+
+function fallbackPriorityBandLabel(band: string): string {
+  const map: Record<string, string> = {
+    low: "Низкий",
+    medium: "Средний",
+    high: "Высокий",
+    critical: "Критический",
+  };
+
+  return map[band] || band;
+}
+
+function buildFallbackPriorityReasons(
+  item: any,
+  warnings: string[],
+  duplicates: number[],
+  routingRow?: RoutingRowLike | null
+): string[] {
+  const result: string[] = [];
+
+  const amount = Number(String(item?.principal_amount ?? 0).replace(",", "."));
+  if (amount >= 500000) result.push("Крупная сумма долга");
+  else if (amount >= 100000) result.push("Значимая сумма долга");
+
+  if (item?.due_date) result.push("Есть срок оплаты");
+  if (String(routingRow?.routing_status || "").toLowerCase() === "ready") {
+    result.push("Кейс доступен к выполнению сейчас");
+  }
+  if (String(item?.status || "").toLowerCase() === "draft") {
+    result.push("Карточка ещё черновая");
+  }
+  if (duplicates.length > 0) {
+    result.push("Есть портфельный контекст по должнику");
+  }
+  if (warnings.length > 0) {
+    result.push(`Требует проверки: ${warningLabel(warnings[0])}`);
+  }
+
+  return result.slice(0, 6);
+}
+
 export function buildPortfolioCaseRow(
   item: any,
   all: any[],
-  routingMap?: Map<number, RoutingRowLike>
+  routingMap?: Map<number, RoutingRowLike>,
+  priorityMap?: Map<number, PriorityRowLike>
 ): PortfolioCaseRow {
   const warnings = computeWarnings(item);
   const duplicates = computeDuplicates(item, all);
-  const readinessScore = computeReadiness(item);
   const routingRow = routingMap?.get(Number(item.id)) || null;
-  const smartLevel = computeSmartLevel(item, readinessScore, warnings, routingRow);
+  const priorityRow = priorityMap?.get(Number(item.id)) || null;
 
-  const hint = buildHint(smartLevel, warnings, duplicates, routingRow);
+  const readinessScore = computeReadiness(item, routingRow);
+  const smartLevel = computeSmartLevel(item, readinessScore, warnings, routingRow);
+  const hint = buildHint(smartLevel, warnings, duplicates, routingRow, priorityRow);
+
+  const riskScore = Number(priorityRow?.risk_score ?? readinessScore) || 0;
+  const riskLevel = priorityRow?.risk_level || fallbackPriorityBand(riskScore);
+
+  const priorityScore = Number(priorityRow?.priority_score ?? riskScore) || 0;
+  const priorityBand = priorityRow?.priority_band || fallbackPriorityBand(priorityScore);
+  const priorityBandLabel =
+    priorityRow?.priority_band_label || fallbackPriorityBandLabel(priorityBand);
+
+  const priorityReasons =
+    Array.isArray(priorityRow?.priority_reasons) && priorityRow.priority_reasons.length
+      ? priorityRow.priority_reasons
+      : buildFallbackPriorityReasons(item, warnings, duplicates, routingRow);
+
+  const operatorFocus = priorityRow?.operator_focus || null;
+  const recommendedAction = priorityRow?.recommended_action || null;
+  const mergedRoutingStatus =
+    priorityRow?.routing_status || routingRow?.routing_status || null;
+  const mergedRoutingHint =
+    priorityRow?.routing_hint || routingRow?.routing_hint || null;
+  const mergedWaitingEligibleAt =
+    priorityRow?.waiting_eligible_at || routingRow?.waiting_eligible_at || null;
+  const mergedRouteLane =
+    priorityRow?.route_lane || routingRow?.route_lane || null;
 
   return {
     id: item.id,
@@ -255,6 +410,15 @@ export function buildPortfolioCaseRow(
     status: item.status,
     is_archived: item.is_archived,
 
+    risk_score: riskScore,
+    risk_level: riskLevel,
+    priority_score: priorityScore,
+    priority_band: priorityBand,
+    priority_band_label: priorityBandLabel,
+    priority_reasons: priorityReasons,
+    operator_focus: operatorFocus,
+    recommended_action: recommendedAction,
+
     smart: {
       readinessScore,
       smartLevel,
@@ -264,14 +428,31 @@ export function buildPortfolioCaseRow(
       duplicateCaseIds: duplicates,
       primaryWarning: warnings[0] || null,
       hint,
-      routingStatus: routingRow?.routing_status || null,
-      routingHint: routingRow?.routing_hint || null,
-      waitingEligibleAt: routingRow?.waiting_eligible_at || null,
+      routingStatus: mergedRoutingStatus,
+      routingHint: mergedRoutingHint,
+      waitingEligibleAt: mergedWaitingEligibleAt,
+      routeLane: mergedRouteLane,
+      riskScore,
+      riskLevel,
+      priorityScore,
+      priorityBand,
+      priorityBandLabel,
+      priorityReasons,
+      operatorFocus,
+      recommendedAction,
     },
   };
 }
 
-export function buildPortfolioCaseRows(items: any[], routing?: any): PortfolioCaseRow[] {
+export function buildPortfolioCaseRows(
+  items: any[],
+  routing?: any,
+  priorityItems?: any[]
+): PortfolioCaseRow[] {
   const routingMap = buildRoutingMap(routing);
-  return (items || []).map((item) => buildPortfolioCaseRow(item, items, routingMap));
+  const priorityMap = buildPriorityMap(priorityItems);
+
+  return (items || []).map((item) =>
+    buildPortfolioCaseRow(item, items, routingMap, priorityMap)
+  );
 }

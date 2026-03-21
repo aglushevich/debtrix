@@ -53,6 +53,26 @@ function readinessClass(level?: string) {
   return "is-draft";
 }
 
+function smartWarningLabel(code: string) {
+  const map: Record<string, string> = {
+    missing_debtor_name: "Не указано наименование должника",
+    missing_inn: "Не указан ИНН",
+    missing_due_date: "Не указан срок оплаты",
+    missing_principal_amount: "Не указана сумма долга",
+    missing_contract_type: "Не указан тип договора",
+  };
+
+  return map[code] || code;
+}
+
+function smartSignalLabel(code: string) {
+  const map: Record<string, string> = {
+    organization_resolved: "Организация успешно разрешена",
+  };
+
+  return map[code] || code;
+}
+
 export default function CreateCaseForm({ onCreated }: Props) {
   const [debtorType, setDebtorType] = useState("company");
   const [debtorName, setDebtorName] = useState("");
@@ -103,6 +123,7 @@ export default function CreateCaseForm({ onCreated }: Props) {
   const duplicateItems = preview?.duplicates_found || [];
   const warnings = preview?.warnings || preview?.readiness?.warnings || [];
   const signals = preview?.readiness?.signals || [];
+  const resolvedOrganization = preview?.organization || null;
 
   async function handleLookupOrganization() {
     try {
@@ -174,7 +195,7 @@ export default function CreateCaseForm({ onCreated }: Props) {
     }
 
     previewTimerRef.current = window.setTimeout(() => {
-      loadPreview(commandPayload);
+      void loadPreview(commandPayload);
     }, 450);
 
     return () => {
@@ -187,9 +208,14 @@ export default function CreateCaseForm({ onCreated }: Props) {
   async function handleManualPreview() {
     try {
       setMessage("");
-      await loadPreview(commandPayload);
+      const result = await previewCaseCommandCreate(commandPayload);
+      const nextPreview = (result?.preview || null) as SmartPreview;
+      setPreview(nextPreview);
 
-      if ((preview?.warnings || []).length) {
+      const nextWarnings =
+        nextPreview?.warnings || nextPreview?.readiness?.warnings || [];
+
+      if (nextWarnings.length) {
         setMessage("Проверка выполнена. Посмотри предупреждения ниже.");
       } else {
         setMessage("Проверка выполнена.");
@@ -404,13 +430,39 @@ export default function CreateCaseForm({ onCreated }: Props) {
               </div>
             </div>
 
+            {resolvedOrganization && (
+              <div className="smart-create-info-block">
+                <div className="smart-create-info-title">Организация</div>
+                <div className="smart-create-preview-grid">
+                  <div className="smart-create-preview-item">
+                    <span>Наименование</span>
+                    <strong>
+                      {resolvedOrganization?.name_full ||
+                        resolvedOrganization?.name ||
+                        "—"}
+                    </strong>
+                  </div>
+
+                  <div className="smart-create-preview-item">
+                    <span>ИНН</span>
+                    <strong>{String(resolvedOrganization?.inn || "—")}</strong>
+                  </div>
+
+                  <div className="smart-create-preview-item">
+                    <span>ОГРН</span>
+                    <strong>{String(resolvedOrganization?.ogrn || "—")}</strong>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {!!signals.length && (
               <div className="smart-create-info-block">
                 <div className="smart-create-info-title">Сигналы</div>
                 <div className="smart-create-chip-list">
                   {signals.map((item, index) => (
                     <span key={`${item}:${index}`} className="smart-create-chip">
-                      {item}
+                      {smartSignalLabel(item)}
                     </span>
                   ))}
                 </div>
@@ -422,7 +474,7 @@ export default function CreateCaseForm({ onCreated }: Props) {
                 <div className="smart-create-info-title">Предупреждения</div>
                 <ul className="smart-create-list">
                   {warnings.map((item, index) => (
-                    <li key={`${item}:${index}`}>{item}</li>
+                    <li key={`${item}:${index}`}>{smartWarningLabel(item)}</li>
                   ))}
                 </ul>
               </div>
